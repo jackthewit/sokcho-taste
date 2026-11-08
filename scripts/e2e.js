@@ -93,7 +93,7 @@ const scenarios = {
     await h.key('단맛').click(); s = await h.state(); assert(s.layers.length === 12, '재클릭 시 추가되면 안 됨');
     await h.key('단맛').locator('.key-mini-actions span').first().click(); s = await h.state(); assert(s.layers.length === 13, '+ 로 추가');
     await h.key('단맛').locator('.key-mini-actions span').nth(1).click(); s = await h.state(); assert(s.layers.length === 12, '− 로 삭제');
-    pg.once('dialog', d => d.accept());
+    pg.once('dialog', d => d.accept().catch(() => {}));
     await h.key('지우기').click(); s = await h.state(); assert(s.layers.length === 0, '지우기');
     await pg.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z'); s = await h.state(); assert(s.layers.length === 12, '되돌리기로 복구');
   },
@@ -217,7 +217,7 @@ const scenarios = {
           await pg.locator('.seg button', { hasText: bg }).click();
           await pg.locator('select').selectOption(fonts[n % 4]);
           const logo = ['소속 이름(글자)', '패턴 크롭', '글리프 마크', '없음'][n % 4]; n++;
-          await pg.locator('.seg button', { hasText: logo }).click();
+          await pg.locator('.seg.wrap button', { hasText: logo }).click();
           await checkFits(`${kind}/${pr}/${bg}/${logo}`);
         }
       }
@@ -233,6 +233,7 @@ const scenarios = {
       await pg.locator('.prop-grid, .card-side input[type=range]').first().fill('1.4').catch(() => {});
     }
     await pg.locator('.card-side > .check input').check();
+    await pg.locator('details:has(summary:text-is("패턴면")) summary').click(); // 접힌 섹션 열기
     await pg.locator('.seg button', { hasText: '타일 반복' }).click();
     const fi = await h.download(() => pg.locator('.card-figure:has-text("정보면") .svg-btn').click()); const r1 = checkSvg(fi, { minPaths: 10 });
     const fp = await h.download(() => pg.locator('.card-figure:has-text("패턴면") .svg-btn').click()); checkSvg(fp, { minPaths: 1 });
@@ -322,16 +323,18 @@ async function runElectron() {
       app = await _electron.launch({ executablePath: require(path.join(PROJECT, 'node_modules', 'electron')), args: [PROJECT, '--no-sandbox', '--disable-gpu'], cwd: PROJECT, timeout: 90000, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' } });
       const dlDir = fs.mkdtempSync(path.join(TMP, 'electron-dl-'));
       await app.evaluate(({ session }, dir) => {
-        session.defaultSession.on('will-download', (_e, item) => { item.setSavePath(require('path').join(dir, Date.now() + '-' + item.getFilename())); });
+        session.defaultSession.on('will-download', (_e, item) => { try { item.setSavePath(dir + '/' + Date.now() + '-' + item.getFilename()); } catch (err) { console.error('will-download', err); } });
       }, dlDir);
+      app.process().stderr?.on('data', d => { const t = String(d); if (/FATAL|Error|crash/i.test(t) && !/ERROR:.*(dbus|gpu|vaapi|viz|angle)/i.test(t)) console.log('  [electron stderr]', t.trim().slice(0, 200)); });
       const pg = await app.firstWindow();
       await pg.waitForLoadState('networkidle');
+      pg.on('dialog', d => d.accept().catch(() => {}));
       const h = helpers(pg, false, dlDir);
       for (const name of ['keypad', 'canvasOps', 'cropExport', 'pattern', 'card']) {
         await pg.evaluate(() => localStorage.clear()); await pg.reload({ waitUntil: 'networkidle' });
         const errors = []; pg.on('pageerror', e => errors.push(String(e)));
         try { const d = await scenarios[name](pg, h, round); assert(errors.length === 0, `오류: ${errors[0]}`); record('데스크톱 앱(Electron)', name, round, true, d || ''); }
-        catch (e) { record('데스크톱 앱(Electron)', name, round, false, e.message.split('\n')[0].slice(0, 160)); }
+        catch (e) { await pg.screenshot({ path: path.join(TMP, `fail-electron-${name}-${round}.png`) }).catch(() => {}); record('데스크톱 앱(Electron)', name, round, false, e.message.split('\n').slice(0, 3).join(' | ').slice(0, 300)); }
       }
     } catch (e) { record('데스크톱 앱(Electron)', 'launch', round, false, e.message.slice(0, 160)); }
     finally { if (app) await app.close().catch(() => {}); }
@@ -340,7 +343,7 @@ async function runElectron() {
 
 (async () => {
   console.log(`테스트 시작: ${ROOT}, 반복 ${ROUNDS}회, 임시 폴더 ${TMP}`);
-  await runWeb();
+  if (!process.argv.includes('--only-electron')) await runWeb();
   if (!process.argv.includes('--no-electron')) await runElectron();
   const pass = results.filter(r => r.ok).length, fail = results.length - pass;
   console.log(`\n결과: ${pass} 통과 / ${fail} 실패 (총 ${results.length})`);
