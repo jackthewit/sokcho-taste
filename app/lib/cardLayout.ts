@@ -2,7 +2,7 @@
 // 정보면 = 블록(로고 · 이름 · 연락처)을 9칸 위치에 배치하는 조립식. 패턴면 = 앱의 조합(크롭).
 import { SEASONAL_COLORS } from '../constants/colors';
 import { getGlyphPath } from './glyphs';
-import { buildPatternDef, layersMarkup, esc, SVG_HEADER } from './svgBuilder';
+import { buildPatternDef, layersMarkup, esc, SVG_HEADER, resolveColor } from './svgBuilder';
 import { aspectCrop, type Anchor, type CropRect, type SenseState } from '../context/SenseContext';
 import type { TextSpec } from './textFonts';
 
@@ -59,6 +59,11 @@ export function fitSize(text: string, maxWidth: number, size: number, minSize: n
   return Math.max(minSize, Math.floor(size * maxWidth / w));
 }
 
+function resolveLayerColor(state: SenseState, layerId?: string): string {
+  const layer = (layerId && state.layers.find(l => l.id === layerId)) || state.layers.find(l => l.visible);
+  return layer ? resolveColor(layer, state.season) : '#999';
+}
+
 const lines = (s: string) => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
 // ─── 블록 ────────────────────────────────────────────────
@@ -87,8 +92,8 @@ function textBlock(ls: Line[], maxWidth: number): Block {
   };
 }
 
-function glyphMarkup(state: SenseState, x: number, y: number, size: number, fill: string, opacity = 1): string {
-  const layer = state.layers.find(l => l.visible);
+function glyphMarkup(state: SenseState, x: number, y: number, size: number, fill: string, opacity = 1, layerId?: string): string {
+  const layer = (layerId && state.layers.find(l => l.id === layerId)) || state.layers.find(l => l.visible);
   if (!layer) return '';
   const g = getGlyphPath(layer.category, layer.type, layer.intensity);
   const s = size / Math.max(g.width, g.height);
@@ -123,39 +128,32 @@ export function buildInfoDoc(state: SenseState, uid = 'info'): CardDoc {
   const W = CARD_W - m * 2 - barW, H = CARD_H - m * 2;
   if (card.accentBar) markup += `<rect x="${off}" y="${off}" width="14" height="${CARD_H}" fill="${c.point}"/>`;
 
-  // 1) 로고 블록
+  // 1) 마크 블록(패턴/글리프) + 소속 블록(글자) — 따로 배치하거나 소속을 마크에 붙임
   const orgText = f.org.trim();
-  let logo: Block | null = null;
   const L = card.logo;
-  if (L.type === 'org' && (orgText || f.tagline || f.orgEn)) {
-    const ls: Line[] = [];
-    if (f.tagline) ls.push({ text: f.tagline, size: 13 * L.size, weight: 400, fill: c.muted, lh: 18 * L.size });
-    if (orgText) ls.push({ text: orgText, size: 30 * L.size, weight: 700, fill: c.text, lh: 38 * L.size });
-    if (f.orgEn) ls.push({ text: f.orgEn, size: 12 * L.size, weight: 400, fill: c.muted, spacing: 0.14, lh: 18 * L.size });
-    logo = textBlock(ls, W * 0.6);
-  } else if (L.type === 'pattern' || L.type === 'glyph') {
-    const markW = (L.shape === 'wide' ? 190 : 100) * L.size, markH = (L.shape === 'wide' ? 100 : 100) * L.size;
-    const side = (orgText || f.tagline) ? textBlock([
-      ...(f.tagline ? [{ text: f.tagline, size: 12 * L.size, weight: 400 as const, fill: c.muted, lh: 17 * L.size }] : []),
-      ...(orgText ? [{ text: orgText, size: 22 * L.size, weight: 700 as const, fill: c.text, lh: 28 * L.size }] : []),
-      ...(f.orgEn ? [{ text: f.orgEn, size: 11 * L.size, weight: 400 as const, fill: c.muted, spacing: 0.12, lh: 16 * L.size }] : []),
-    ], W * 0.45) : null;
-    const gap = side ? 16 : 0;
-    const w = markW + gap + (side ? side.w : 0), h = Math.max(markH, side ? side.h : 0);
-    logo = {
-      w, h,
-      place(x, y, align) {
-        // 가운데/오른쪽 정렬이면 마크와 글을 블록 폭 안에서 그대로 배치(마크가 왼쪽)
-        const mx = x, my = y + (h - markH) / 2;
+  const O = card.orgBlock;
+  let mark: Block | null = null;
+  if (L.type === 'pattern' || L.type === 'glyph') {
+    const markW = (L.shape === 'wide' && L.type === 'pattern' ? 190 : 100) * L.size, markH = 100 * L.size;
+    const glyphFill = L.color === 'text' ? c.text : L.color === 'auto' ? resolveLayerColor(state, L.glyphLayerId) : c.point;
+    mark = {
+      w: markW, h: markH,
+      place(x, y) {
         const mk = L.type === 'pattern'
-          ? patternMarkup(state, mx, my, markW, markH, L.shape, `${uid}-logo`)
-          : glyphMarkup(state, mx, my, Math.min(markW, markH), c.point);
-        const out = { texts: [] as TextSpec[], markup: mk };
-        if (side) { const r = side.place(mx + markW + gap, y + (h - side.h) / 2, 'start'); out.texts.push(...r.texts); }
-        void align;
-        return out;
+          ? patternMarkup(state, x, y, markW, markH, L.shape, `${uid}-logo`)
+          : glyphMarkup(state, x, y, Math.min(markW, markH), glyphFill, L.opacity ?? 1, L.glyphLayerId);
+        return { texts: [], markup: mk };
       },
     };
+  }
+  let org: Block | null = null;
+  if (O.show && (orgText || f.tagline || f.orgEn)) {
+    const k = O.size;
+    const ls: Line[] = [];
+    if (f.tagline) ls.push({ text: f.tagline, size: 13 * k, weight: 400, fill: c.muted, lh: 18 * k });
+    if (orgText) ls.push({ text: orgText, size: 30 * k, weight: 700, fill: c.text, lh: 38 * k });
+    if (f.orgEn) ls.push({ text: f.orgEn, size: 12 * k, weight: 400, fill: c.muted, spacing: 0.14, lh: 18 * k });
+    org = textBlock(ls, W * 0.6);
   }
 
   // 2) 이름 블록
@@ -238,37 +236,70 @@ export function buildInfoDoc(state: SenseState, uid = 'info'): CardDoc {
     }
   }
 
-  // 4) 배치 — 먼저 위치를 계산하고, 세로로 겹치는 블록은 가운데 블록을 밀어 겹침을 피함
+  // 4) 배치 — 위치 계산 → 세로로 겹치는 블록은 가운데 블록을 밀어 겹침을 피함 → 미세 이동 적용
   const GAP = 14;
-  const entries: { b: Block; a: Anchor; x: number; y: number; key: 'logo' | 'name' | 'contacts' }[] = [];
+  type Key = 'mark' | 'org' | 'name' | 'contacts';
+  const entries: { b: Block; a: Anchor; x: number; y: number; key: Key; dx: number; dy: number }[] = [];
   const pos = (b: Block, a: Anchor) => ({
     x: a.endsWith('l') ? x0 : a.endsWith('c') ? x0 + (W - b.w) / 2 : x0 + W - b.w,
     y: a.startsWith('t') ? y0 : a.startsWith('m') ? y0 + (H - b.h) / 2 : y0 + H - b.h,
   });
-  if (logo) entries.push({ b: logo, a: L.pos, ...pos(logo, L.pos), key: 'logo' });
-  if (name) entries.push({ b: name, a: N.pos, ...pos(name, N.pos), key: 'name' });
-  if (contacts) entries.push({ b: contacts, a: C.pos, ...pos(contacts, C.pos), key: 'contacts' });
+  const attached = org && mark && O.attach !== 'free';
+  if (mark && org && attached) {
+    // 마크 + 소속을 한 덩어리로 배치
+    const gap = 16;
+    const horiz = O.attach === 'right';
+    const w = horiz ? mark.w + gap + org.w : Math.max(mark.w, org.w);
+    const h = horiz ? Math.max(mark.h, org.h) : mark.h + gap * 0.6 + org.h;
+    const m = mark, o = org;
+    const combo: Block = {
+      w, h,
+      place(x, y, align) {
+        if (horiz) {
+          const r1 = m.place(x, y + (h - m.h) / 2, 'start');
+          const r2 = o.place(x + m.w + gap + O.dx, y + (h - o.h) / 2 + O.dy, 'start');
+          return { texts: [...r1.texts, ...r2.texts], markup: r1.markup + r2.markup };
+        }
+        const mx = align === 'start' ? x : align === 'middle' ? x + (w - m.w) / 2 : x + w - m.w;
+        const ox = align === 'start' ? x : align === 'middle' ? x + (w - o.w) / 2 : x + w - o.w;
+        const r1 = m.place(mx, y, align);
+        const r2 = o.place(ox + O.dx, y + m.h + gap * 0.6 + O.dy, align);
+        return { texts: [...r1.texts, ...r2.texts], markup: r1.markup + r2.markup };
+      },
+    };
+    entries.push({ b: combo, a: L.pos, ...pos(combo, L.pos), key: 'mark', dx: L.dx, dy: L.dy });
+  } else {
+    if (mark) entries.push({ b: mark, a: L.pos, ...pos(mark, L.pos), key: 'mark', dx: L.dx, dy: L.dy });
+    if (org) entries.push({ b: org, a: O.pos, ...pos(org, O.pos), key: 'org', dx: O.dx, dy: O.dy });
+  }
+  if (name) entries.push({ b: name, a: N.pos, ...pos(name, N.pos), key: 'name', dx: N.dx, dy: N.dy });
+  if (contacts) entries.push({ b: contacts, a: C.pos, ...pos(contacts, C.pos), key: 'contacts', dx: C.dx, dy: C.dy });
 
+  const isWatermark = (e: typeof entries[0]) => e.key === 'mark' && L.type === 'glyph' && (L.opacity ?? 1) <= 0.5 && !attached;
+  markup += `<clipPath id="${uid}-card"><rect x="${off}" y="${off}" width="${CARD_W}" height="${CARD_H}"/></clipPath>`;
   const overlapX = (p: typeof entries[0], q: typeof entries[0]) => p.x < q.x + q.b.w && q.x < p.x + p.b.w;
   const overlapY = (p: typeof entries[0], q: typeof entries[0]) => p.y < q.y + q.b.h + GAP && q.y < p.y + p.b.h + GAP;
   const vOrder = (a: Anchor) => (a.startsWith('t') ? 0 : a.startsWith('m') ? 1 : 2);
   for (let pass = 0; pass < 3; pass++) {
     for (const p of entries) for (const q of entries) {
-      if (p === q || !overlapX(p, q) || !overlapY(p, q)) continue;
+      if (p === q || isWatermark(p) || isWatermark(q) || !overlapX(p, q) || !overlapY(p, q)) continue;
       const [top, bottom] = vOrder(p.a) <= vOrder(q.a) ? [p, q] : [q, p];
-      if (vOrder(top.a) === vOrder(bottom.a)) continue; // 같은 칸을 고른 경우는 사용자의 의도로 보고 둠
-      if (vOrder(bottom.a) === 1) bottom.y = top.y + top.b.h + GAP;             // 위 블록이 가운데 블록을 아래로
-      else if (vOrder(top.a) === 1) top.y = bottom.y - top.b.h - GAP;           // 아래 블록이 가운데 블록을 위로
-      else top.y = Math.max(y0, bottom.y - top.b.h - GAP);                       // 위-아래가 직접 겹치면 위 블록을 올림
+      if (vOrder(top.a) === vOrder(bottom.a)) continue; // 같은 칸은 사용자의 의도로 보고 둠
+      if (vOrder(bottom.a) === 1) bottom.y = top.y + top.b.h + GAP;
+      else if (vOrder(top.a) === 1) top.y = bottom.y - top.b.h - GAP;
+      else top.y = Math.max(y0, bottom.y - top.b.h - GAP);
     }
   }
+  // 워터마크를 먼저(뒤에) 그리고, 나머지를 그 위에
+  entries.sort((a, b) => Number(isWatermark(b)) - Number(isWatermark(a)));
   for (const e of entries) {
-    const r = e.b.place(e.x, e.y, anchorAlign(e.a));
-    texts.push(...r.texts); markup += r.markup;
+    const r = e.b.place(e.x + e.dx, e.y + e.dy, anchorAlign(e.a));
+    texts.push(...r.texts);
+    markup += e.key === 'mark' ? `<g clip-path="url(#${uid}-card)">${r.markup}</g>` : r.markup;
     if (e.key === 'name' && card.divider) {
       const al = anchorAlign(e.a);
-      const lx = al === 'start' ? e.x : al === 'middle' ? e.x + e.b.w / 2 - 20 : e.x + e.b.w - 40;
-      markup += `<rect x="${lx.toFixed(1)}" y="${(e.y + e.b.h + 8).toFixed(1)}" width="40" height="3" fill="${c.point}"/>`;
+      const lx = al === 'start' ? e.x + e.dx : al === 'middle' ? e.x + e.dx + e.b.w / 2 - 20 : e.x + e.dx + e.b.w - 40;
+      markup += `<rect x="${lx.toFixed(1)}" y="${(e.y + e.dy + e.b.h + 8).toFixed(1)}" width="40" height="3" fill="${c.point}"/>`;
     }
   }
 

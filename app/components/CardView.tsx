@@ -9,14 +9,24 @@ import {
 import { SEASONAL_COLORS, TASTE_LABELS } from '../constants/colors';
 import { buildInfoDoc, buildPatternDoc, cardDocToSvg, cardColors } from '../lib/cardLayout';
 import { textsToPaths } from '../lib/textFonts';
-import { downloadText, downloadPng, stamp } from '../lib/svgBuilder';
+import { downloadText, downloadPng, stamp, resolveColor } from '../lib/svgBuilder';
+import { getGlyphPath } from '../lib/glyphs';
 
 const TASTE_KEYS: TasteKey[] = ['sweet', 'salty', 'spicy', 'sour', 'bitter', 'umami'];
 const BGS: { id: CardBg; label: string }[] = [{ id: 'white', label: '흰색' }, { id: 'black', label: '검정' }, { id: 'season', label: '계절색' }];
 const ANCHORS: Anchor[] = ['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br'];
 const LOGO_TYPES: { id: LogoType; label: string }[] = [
-  { id: 'org', label: '소속 이름(글자)' }, { id: 'pattern', label: '패턴 크롭' }, { id: 'glyph', label: '글리프 마크' }, { id: 'none', label: '없음' },
+  { id: 'glyph', label: '글리프 마크' }, { id: 'pattern', label: '패턴 크롭' }, { id: 'none', label: '없음' },
 ];
+
+function LayerThumbSmall({ id }: { id: string }) {
+  const { state } = useSense();
+  const l = state.layers.find(x => x.id === id);
+  if (!l) return null;
+  const g = getGlyphPath(l.category, l.type, l.intensity);
+  const sc = 30 / Math.max(g.width, g.height);
+  return <svg viewBox="-20 -20 40 40" width="34" height="34"><path d={g.d} transform={`scale(${sc})`} fill={resolveColor(l, state.season)} /></svg>;
+}
 
 function Field({ k, label, placeholder, multiline }: { k: keyof CardFields; label: string; placeholder?: string; multiline?: boolean }) {
   const { state, dispatch } = useSense();
@@ -34,6 +44,17 @@ function AnchorPicker({ value, onChange, label }: { value: Anchor; onChange: (a:
   return (
     <div className="anchor-picker" role="group" aria-label={label}>
       {ANCHORS.map(a => <button key={a} type="button" className={`anchor-cell ${value === a ? 'on' : ''}`} title={a} onClick={() => onChange(a)} />)}
+    </div>
+  );
+}
+
+/** 미세 이동: 가로/세로 mm 단위 (내부 단위 0.1mm) */
+function Nudge({ dx, dy, onChange }: { dx: number; dy: number; onChange: (dx: number, dy: number) => void }) {
+  return (
+    <div className="nudge">
+      <label><span>가로 이동 <b>{(dx / 10).toFixed(1)}mm</b></span><input type="range" min="-300" max="300" step="5" value={dx} onChange={e => onChange(Number(e.target.value), dy)} /></label>
+      <label><span>세로 이동 <b>{(dy / 10).toFixed(1)}mm</b></span><input type="range" min="-200" max="200" step="5" value={dy} onChange={e => onChange(dx, Number(e.target.value))} /></label>
+      {(dx !== 0 || dy !== 0) && <button type="button" className="mini-btn" onClick={() => onChange(0, 0)}>원위치</button>}
     </div>
   );
 }
@@ -145,22 +166,56 @@ export default function CardView() {
           </div>
         </Section>
 
-        <Section title="로고 자리">
+        <Section title="마크 (패턴 / 글리프)">
           <div className="seg wrap">
             {LOGO_TYPES.map(t => <button key={t.id} className={card.logo.type === t.id ? 'on' : ''} onClick={() => setCard({ logo: { type: t.id } })}>{t.label}</button>)}
           </div>
           {card.logo.type !== 'none' && (
             <div className="block-controls">
-              <div className="prop"><span>위치</span><AnchorPicker label="로고 위치" value={card.logo.pos} onChange={pos => setCard({ logo: { pos } })} /></div>
-              <label className="prop"><span>크기 <b>{Math.round(card.logo.size * 100)}%</b></span><input type="range" min="0.5" max="2" step="0.05" value={card.logo.size} onChange={e => setCard({ logo: { size: Number(e.target.value) } })} /></label>
+              <div className="prop"><span>위치</span><AnchorPicker label="마크 위치" value={card.logo.pos} onChange={pos => setCard({ logo: { pos } })} /></div>
+              <Nudge dx={card.logo.dx} dy={card.logo.dy} onChange={(dx, dy) => setCard({ logo: { dx, dy } })} />
+              <label className="prop"><span>크기 <b>{card.logo.type === 'glyph' ? `${(card.logo.size * 10).toFixed(0)}mm` : `${Math.round(card.logo.size * 100)}%`}</b></span><input type="range" min={card.logo.type === 'glyph' ? 0.3 : 0.5} max={card.logo.type === 'glyph' ? 5 : 3} step="0.05" value={card.logo.size} onChange={e => setCard({ logo: { size: Number(e.target.value) } })} /></label>
               {card.logo.type === 'pattern' && (
                 <div className="prop"><span>모양</span>
                   <div className="seg">
-                    {(['wide', 'rect', 'circle'] as const).map(s => <button key={s} className={card.logo.shape === s ? 'on' : ''} onClick={() => setCard({ logo: { shape: s } })}>{s === 'wide' ? '가로형' : s === 'rect' ? '정사각' : '원형'}</button>)}
+                    {(['wide', 'rect', 'circle'] as const).map(sh => <button key={sh} className={card.logo.shape === sh ? 'on' : ''} onClick={() => setCard({ logo: { shape: sh } })}>{sh === 'wide' ? '가로형' : sh === 'rect' ? '정사각' : '원형'}</button>)}
                   </div>
                 </div>
               )}
-              {(card.logo.type === 'pattern' || card.logo.type === 'glyph') && <p className="side-note">마크 옆에 소속/가게 이름과 문구가 함께 붙습니다(비우면 마크만).</p>}
+              {card.logo.type === 'glyph' && (
+                <>
+                  <div className="prop"><span>어떤 글리프</span>
+                    <div className="glyph-pick">
+                      {state.layers.filter(l => l.visible).map(l => (
+                        <button key={l.id} className={`glyph-pick-btn ${(card.logo.glyphLayerId || state.layers.find(x => x.visible)?.id) === l.id ? 'on' : ''}`} title={l.type} onClick={() => setCard({ logo: { glyphLayerId: l.id } })}>
+                          <LayerThumbSmall id={l.id} />
+                        </button>
+                      ))}
+                      {state.layers.length === 0 && <span className="side-note">조합 탭에서 글리프를 먼저 추가하세요</span>}
+                    </div>
+                  </div>
+                  <div className="prop"><span>색</span>
+                    <div className="seg">{(['point', 'text', 'auto'] as const).map(v => <button key={v} className={card.logo.color === v ? 'on' : ''} onClick={() => setCard({ logo: { color: v } })}>{v === 'point' ? '포인트 색' : v === 'text' ? '글자색' : '원래 색'}</button>)}</div>
+                  </div>
+                  <label className="prop"><span>진하기 <b>{Math.round((card.logo.opacity ?? 1) * 100)}%</b> <small>(50% 이하면 배경 워터마크처럼 글자 뒤에 깔림)</small></span><input type="range" min="0.05" max="1" step="0.05" value={card.logo.opacity ?? 1} onChange={e => setCard({ logo: { opacity: Number(e.target.value) } })} /></label>
+                </>
+              )}
+            </div>
+          )}
+        </Section>
+
+        <Section title={isStore ? '가게 이름 블록' : '소속 블록'}>
+          <label className="check" style={{ marginTop: 0 }}><input type="checkbox" checked={card.orgBlock.show} onChange={e => setCard({ orgBlock: { show: e.target.checked } })} /> 표시</label>
+          {card.orgBlock.show && (
+            <div className="block-controls">
+              <div className="prop"><span>놓는 방법</span>
+                <div className="seg">
+                  {(['right', 'below', 'free'] as const).map(v => <button key={v} className={card.orgBlock.attach === v ? 'on' : ''} disabled={v !== 'free' && card.logo.type === 'none'} onClick={() => setCard({ orgBlock: { attach: v } })}>{v === 'right' ? '마크 오른쪽에' : v === 'below' ? '마크 아래에' : '자유 위치'}</button>)}
+                </div>
+              </div>
+              {(card.orgBlock.attach === 'free' || card.logo.type === 'none') && <div className="prop"><span>위치</span><AnchorPicker label="소속 위치" value={card.orgBlock.pos} onChange={pos => setCard({ orgBlock: { pos } })} /></div>}
+              <Nudge dx={card.orgBlock.dx} dy={card.orgBlock.dy} onChange={(dx, dy) => setCard({ orgBlock: { dx, dy } })} />
+              <label className="prop"><span>크기 <b>{Math.round(card.orgBlock.size * 100)}%</b></span><input type="range" min="0.5" max="2.2" step="0.05" value={card.orgBlock.size} onChange={e => setCard({ orgBlock: { size: Number(e.target.value) } })} /></label>
             </div>
           )}
         </Section>
@@ -168,6 +223,7 @@ export default function CardView() {
         <Section title="이름 블록">
           <div className="block-controls">
             <div className="prop"><span>위치</span><AnchorPicker label="이름 위치" value={card.name.pos} onChange={pos => setCard({ name: { pos } })} /></div>
+            <Nudge dx={card.name.dx} dy={card.name.dy} onChange={(dx, dy) => setCard({ name: { dx, dy } })} />
             <label className="prop"><span>크기 <b>{Math.round(card.name.size * 100)}%</b></span><input type="range" min="0.6" max="1.6" step="0.05" value={card.name.size} onChange={e => setCard({ name: { size: Number(e.target.value) } })} /></label>
             <label className="prop"><span>자간 <b>{card.name.spacing === 0 ? '없음' : card.name.spacing}</b></span><input type="range" min="0" max="0.8" step="0.1" value={card.name.spacing} onChange={e => setCard({ name: { spacing: Number(e.target.value) } })} /></label>
             <div className="prop"><span>영문 이름</span>
@@ -183,6 +239,7 @@ export default function CardView() {
         <Section title="연락처 블록">
           <div className="block-controls">
             <div className="prop"><span>위치</span><AnchorPicker label="연락처 위치" value={card.contacts.pos} onChange={pos => setCard({ contacts: { pos } })} /></div>
+            <Nudge dx={card.contacts.dx} dy={card.contacts.dy} onChange={(dx, dy) => setCard({ contacts: { dx, dy } })} />
             <label className="prop"><span>크기 <b>{Math.round(card.contacts.size * 100)}%</b></span><input type="range" min="0.7" max="1.4" step="0.05" value={card.contacts.size} onChange={e => setCard({ contacts: { size: Number(e.target.value) } })} /></label>
             <div className="prop"><span>단 구성</span>
               <div className="seg"><button className={card.contacts.columns === 1 ? 'on' : ''} onClick={() => setCard({ contacts: { columns: 1 } })}>1단</button><button className={card.contacts.columns === 2 ? 'on' : ''} onClick={() => setCard({ contacts: { columns: 2 } })}>2단</button></div>

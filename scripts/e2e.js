@@ -223,7 +223,7 @@ const scenarios = {
         for (const bg of ['흰색', '검정', '계절색']) {
           await pg.locator('.seg button', { hasText: bg }).click();
           await pg.locator('select').selectOption(fonts[n % 4]);
-          const logo = ['소속 이름(글자)', '패턴 크롭', '글리프 마크', '없음'][n % 4]; n++;
+          const logo = ['글리프 마크', '패턴 크롭', '없음'][n % 3]; n++;
           await pg.locator('.seg.wrap button', { hasText: logo }).click();
           await checkFits(`${kind}/${pr}/${bg}/${logo}`);
         }
@@ -233,8 +233,9 @@ const scenarios = {
       for (let i = 0; i < 6; i++) {
         const pick = (gi, idx) => cells.nth(gi).locator('.anchor-cell').nth(idx).click();
         const a = (round * 7 + i * 3) % 9, b = (round * 5 + i * 4 + 2) % 9, c2 = (round * 3 + i * 5 + 4) % 9;
-        if (await cells.count() >= 3) { await pick(0, a); await pick(1, b); await pick(2, c2); }
-        else { await pick(0, b); await pick(1, c2); }
+        const cc = await cells.count();
+        if (cc >= 3) { await pick(0, a); await pick(1, b); await pick(2, c2); if (cc >= 4) await pick(3, (a + 4) % 9); }
+        else if (cc === 2) { await pick(0, b); await pick(1, c2); }
         await checkFits(`${kind}/위치조합${i}`);
       }
       await pg.locator('.prop-grid, .card-side input[type=range]').first().fill('1.4').catch(() => {});

@@ -33,8 +33,8 @@ export type CardBg = 'white' | 'black' | 'season';
 export type FontId = 'noto-sans-kr' | 'noto-serif-kr' | 'nanum-myeongjo' | 'gowun-batang';
 /** 9칸 위치: 위/가운데/아래 × 왼쪽/가운데/오른쪽 */
 export type Anchor = 'tl' | 'tc' | 'tr' | 'ml' | 'mc' | 'mr' | 'bl' | 'bc' | 'br';
-export type LogoType = 'org' | 'pattern' | 'glyph' | 'none';
-export type CardPreset = 'classic-left' | 'classic-right' | 'center' | 'bar';
+export type LogoType = 'org' | 'pattern' | 'glyph' | 'none'; // 'org' 는 이전 버전 호환용(불러올 때 변환)
+export type CardPreset = 'classic-left' | 'classic-right' | 'center' | 'watermark' | 'bar';
 
 export interface CardFields {
   name: string;
@@ -69,9 +69,12 @@ export interface CardState {
   margin: number;                 // 안쪽 여백 (0.1mm 단위)
   divider: boolean;               // 이름 아래 짧은 구분선
   accentBar: boolean;             // 왼쪽 세로 포인트 띠
-  logo: { type: LogoType; pos: Anchor; size: number; shape: 'rect' | 'circle' | 'wide'; };
-  name: { pos: Anchor; size: number; spacing: number; en: 'inline' | 'below' | 'hidden'; titlePos: 'above' | 'inline' | 'below'; };
-  contacts: { pos: Anchor; columns: 1 | 2; labels: 'word' | 'short' | 'none'; size: number; addressFirst: boolean; };
+  /** 마크(패턴 크롭 / 글리프) 블록 */
+  logo: { type: LogoType; pos: Anchor; size: number; shape: 'rect' | 'circle' | 'wide'; glyphLayerId?: string; color: 'point' | 'text' | 'auto'; opacity: number; dx: number; dy: number; };
+  /** 소속/가게 이름 블록 — 마크에 붙이거나 자유 위치 */
+  orgBlock: { show: boolean; attach: 'right' | 'below' | 'free'; pos: Anchor; size: number; dx: number; dy: number; };
+  name: { pos: Anchor; size: number; spacing: number; en: 'inline' | 'below' | 'hidden'; titlePos: 'above' | 'inline' | 'below'; dx: number; dy: number; };
+  contacts: { pos: Anchor; columns: 1 | 2; labels: 'word' | 'short' | 'none'; size: number; addressFirst: boolean; dx: number; dy: number; };
   fields: CardFields;
 }
 
@@ -92,20 +95,24 @@ export const FONT_FAMILIES: Record<FontId, string> = {
 /** 프리셋 → 블록 배치 */
 export const CARD_PRESETS: Record<CardPreset, { label: string; desc: string; apply: Partial<CardState> }> = {
   'classic-left': {
-    label: '기본 · 왼쪽', desc: '로고 왼쪽 위 · 이름 가운데 · 연락처 아래 (1단)',
-    apply: { logo: { type: 'org', pos: 'tl', size: 1, shape: 'wide' }, name: { pos: 'ml', size: 1, spacing: 0.3, en: 'hidden', titlePos: 'above' }, contacts: { pos: 'bl', columns: 1, labels: 'word', size: 1, addressFirst: true }, divider: false, accentBar: false },
+    label: '기본 · 왼쪽', desc: '소속 왼쪽 위 · 이름 가운데 · 연락처 아래 (1단)',
+    apply: { logo: { type: 'glyph', pos: 'tl', size: 0.8, shape: 'rect', color: 'point', opacity: 1, dx: 0, dy: 0 }, orgBlock: { show: true, attach: 'right', pos: 'tl', size: 1, dx: 0, dy: 0 }, name: { pos: 'ml', size: 1, spacing: 0.3, en: 'hidden', titlePos: 'above', dx: 0, dy: 0 }, contacts: { pos: 'bl', columns: 1, labels: 'word', size: 1, addressFirst: true, dx: 0, dy: 0 }, divider: false, accentBar: false },
   },
   'classic-right': {
-    label: '기본 · 오른쪽', desc: '로고 오른쪽 위 · 이름+영문 · 연락처 2단',
-    apply: { logo: { type: 'org', pos: 'tr', size: 1, shape: 'wide' }, name: { pos: 'ml', size: 1, spacing: 0.3, en: 'inline', titlePos: 'above' }, contacts: { pos: 'bl', columns: 2, labels: 'word', size: 1, addressFirst: false }, divider: false, accentBar: false },
+    label: '기본 · 오른쪽', desc: '소속 오른쪽 위 · 이름+영문 · 연락처 2단',
+    apply: { logo: { type: 'none', pos: 'tr', size: 0.8, shape: 'rect', color: 'point', opacity: 1, dx: 0, dy: 0 }, orgBlock: { show: true, attach: 'free', pos: 'tr', size: 1, dx: 0, dy: 0 }, name: { pos: 'ml', size: 1, spacing: 0.3, en: 'inline', titlePos: 'above', dx: 0, dy: 0 }, contacts: { pos: 'bl', columns: 2, labels: 'word', size: 1, addressFirst: false, dx: 0, dy: 0 }, divider: false, accentBar: false },
   },
   center: {
-    label: '가운데', desc: '로고 위 가운데 · 이름 가운데 · 연락처 아래 가운데',
-    apply: { logo: { type: 'pattern', pos: 'tc', size: 0.9, shape: 'circle' }, name: { pos: 'mc', size: 1, spacing: 0.2, en: 'below', titlePos: 'above' }, contacts: { pos: 'bc', columns: 1, labels: 'short', size: 0.95, addressFirst: false }, divider: true, accentBar: false },
+    label: '가운데', desc: '패턴 마크 위 가운데 · 이름 가운데 · 연락처 아래 가운데',
+    apply: { logo: { type: 'pattern', pos: 'tc', size: 0.9, shape: 'circle', color: 'point', opacity: 1, dx: 0, dy: 0 }, orgBlock: { show: true, attach: 'below', pos: 'tc', size: 0.9, dx: 0, dy: 0 }, name: { pos: 'mc', size: 1, spacing: 0.2, en: 'below', titlePos: 'above', dx: 0, dy: 30 }, contacts: { pos: 'bc', columns: 1, labels: 'short', size: 0.95, addressFirst: false, dx: 0, dy: 0 }, divider: true, accentBar: false },
+  },
+  watermark: {
+    label: '워터마크', desc: '큰 글리프를 흐리게 깔고 · 이름 왼쪽 위 · 연락처 아래',
+    apply: { logo: { type: 'glyph', pos: 'mr', size: 3.6, shape: 'rect', color: 'point', opacity: 0.14, dx: 40, dy: 0 }, orgBlock: { show: true, attach: 'free', pos: 'tr', size: 0.9, dx: 0, dy: 0 }, name: { pos: 'tl', size: 1, spacing: 0.2, en: 'below', titlePos: 'above', dx: 0, dy: 0 }, contacts: { pos: 'bl', columns: 1, labels: 'short', size: 1, addressFirst: false, dx: 0, dy: 0 }, divider: false, accentBar: false },
   },
   bar: {
-    label: '포인트 바', desc: '세로 색 띠 · 로고 오른쪽 아래 · 이름 왼쪽 위',
-    apply: { logo: { type: 'glyph', pos: 'br', size: 1.1, shape: 'rect' }, name: { pos: 'tl', size: 1, spacing: 0.1, en: 'below', titlePos: 'below' }, contacts: { pos: 'bl', columns: 1, labels: 'short', size: 1, addressFirst: false }, divider: false, accentBar: true },
+    label: '포인트 바', desc: '세로 색 띠 · 마크+소속 오른쪽 아래 · 이름 왼쪽 위',
+    apply: { logo: { type: 'glyph', pos: 'br', size: 1.1, shape: 'rect', color: 'point', opacity: 1, dx: 0, dy: 0 }, orgBlock: { show: true, attach: 'right', pos: 'br', size: 1, dx: 0, dy: 0 }, name: { pos: 'tl', size: 1, spacing: 0.1, en: 'below', titlePos: 'below', dx: 0, dy: 0 }, contacts: { pos: 'bl', columns: 1, labels: 'short', size: 1, addressFirst: false, dx: 0, dy: 0 }, divider: false, accentBar: true },
   },
 };
 
@@ -121,7 +128,7 @@ const defaultCard: CardState = {
   margin: 60,
   divider: false,
   accentBar: false,
-  ...(CARD_PRESETS['classic-left'].apply as Pick<CardState, 'logo' | 'name' | 'contacts'>),
+  ...(CARD_PRESETS['classic-left'].apply as Pick<CardState, 'logo' | 'orgBlock' | 'name' | 'contacts'>),
   fields: {
     name: '', nameEn: '', title: '', org: '', orgEn: '', tagline: '',
     phone: '', tel: '', fax: '', email: '', instagram: '', website: '', address: '', hours: '',
@@ -167,7 +174,7 @@ type SenseAction =
   | { type: 'SET_CROP'; payload: CropRect | null }
   | { type: 'SET_CROP_ASPECT'; payload: number | null }
   | { type: 'SET_TILE'; payload: Partial<SenseState['tile']> }
-  | { type: 'SET_CARD'; payload: Partial<Omit<CardState, 'logo' | 'name' | 'contacts'>> & { logo?: Partial<CardState['logo']>; name?: Partial<CardState['name']>; contacts?: Partial<CardState['contacts']> } }
+  | { type: 'SET_CARD'; payload: Partial<Omit<CardState, 'logo' | 'orgBlock' | 'name' | 'contacts'>> & { logo?: Partial<CardState['logo']>; orgBlock?: Partial<CardState['orgBlock']>; name?: Partial<CardState['name']>; contacts?: Partial<CardState['contacts']> } }
   | { type: 'SET_CARD_FIELD'; payload: { key: keyof CardFields; value: string } }
   | { type: 'RESET' }
   | { type: 'UNDO' }
@@ -284,6 +291,7 @@ function coreReducer(state: SenseState, action: SenseAction): SenseState {
       return { ...state, card: {
         ...state.card, ...p,
         logo: { ...state.card.logo, ...(p.logo || {}) },
+        orgBlock: { ...state.card.orgBlock, ...(p.orgBlock || {}) },
         name: { ...state.card.name, ...(p.name || {}) },
         contacts: { ...state.card.contacts, ...(p.contacts || {}) },
       } };
@@ -305,10 +313,15 @@ function coreReducer(state: SenseState, action: SenseAction): SenseState {
       const card: CardState = {
         ...defaultCard, ...c,
         logo: { ...defaultCard.logo, ...(c.logo || {}) },
+        orgBlock: { ...defaultCard.orgBlock, ...(c.orgBlock || {}) },
         name: { ...defaultCard.name, ...(c.name || {}) },
         contacts: { ...defaultCard.contacts, ...(c.contacts || {}) },
         fields,
       };
+      if (card.logo.type === 'org') { // 이전 버전: 글자 로고 → 마크 없음 + 소속 블록 자유 위치
+        card.logo = { ...card.logo, type: 'none' };
+        card.orgBlock = { ...card.orgBlock, show: true, attach: 'free', pos: card.logo.pos };
+      }
       return { ...initialState, ...action.payload, card };
     }
 
