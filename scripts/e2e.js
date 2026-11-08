@@ -44,7 +44,7 @@ function pngSize(file) {
 }
 
 // ─── 페이지 조작 도우미 ─────────────────────────────────
-function helpers(pg, touch) {
+function helpers(pg, touch, electronDir) {
   const key = (l) => pg.locator(`button.keypad-key:has(.key-label:text-is("${l}"))`).first();
   const tab = (l) => pg.locator('.mode-tab', { hasText: l }).click();
   const state = async () => { await pg.waitForTimeout(80); return pg.evaluate(() => JSON.parse(localStorage.getItem('sokcho-bi-composer-v2') || 'null')); };
@@ -64,6 +64,18 @@ function helpers(pg, touch) {
   }
   const fill = (label, v) => pg.locator(`.field:has(span:text-is("${label}")) :is(input,textarea)`).fill(v);
   async function download(trigger) {
+    if (electronDir) {
+      // Electron: will-download 로 저장 폴더에 바로 저장되므로 새 파일이 생길 때까지 기다림
+      const before = new Set(fs.readdirSync(electronDir));
+      await trigger();
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        const now = fs.readdirSync(electronDir).filter(f => !before.has(f) && !f.endsWith('.crdownload'));
+        if (now.length) { const fp = path.join(electronDir, now[0]); const s1 = fs.statSync(fp).size; await pg.waitForTimeout(300); if (fs.statSync(fp).size === s1 && s1 > 0) return fp; }
+        await pg.waitForTimeout(200);
+      }
+      throw new Error('Electron 다운로드 파일이 생기지 않음');
+    }
     const [d] = await Promise.all([pg.waitForEvent('download', { timeout: 60000 }), trigger()]);
     const fn = path.join(TMP, `${Date.now()}-${Math.random().toString(36).slice(2)}-${d.suggestedFilename()}`);
     await d.saveAs(fn); return fn;
@@ -93,19 +105,27 @@ const scenarios = {
     await h.drag(sx, sy, tx, ty); sel = await h.selected();
     assert(Math.round(sel.x) === 500 && Math.round(sel.y) === 500, `중심 스냅 기대, 실제 ${sel.x},${sel.y}`);
     // 회전 손잡이 → 정각 스냅
+    await pg.locator('svg.composer-svg').scrollIntoViewIfNeeded();
     const rh = await pg.locator('.rotate-handle').boundingBox(); const b = await h.canvasBox();
     const cx = b.x + b.width * sel.x / 1000, cy = b.y + b.height * sel.y / 1000; const r = Math.hypot(rh.x + rh.width / 2 - cx, rh.y + rh.height / 2 - cy);
     const a = (-90 + 93) * Math.PI / 180;
     await h.drag(rh.x + rh.width / 2, rh.y + rh.height / 2, cx + r * Math.cos(a), cy + r * Math.sin(a)); sel = await h.selected();
     assert(Math.round(sel.rotation) === 90, `90° 스냅 기대, ${sel.rotation}`);
     // 크기 손잡이
+    await pg.locator('.scale-handle').scrollIntoViewIfNeeded();
     const sh = await pg.locator('.scale-handle').boundingBox(); const before = sel.size;
+    { const b2 = await h.canvasBox(); var cx2 = b2.x + b2.width * sel.x / 1000, cy2 = b2.y + b2.height * sel.y / 1000; }
     { // 중심에서 손잡이 방향으로 60px 더 바깥쪽으로 끌기
-      const hx = sh.x + sh.width / 2, hy = sh.y + sh.height / 2; const d = Math.hypot(hx - cx, hy - cy) || 1;
-      await h.drag(hx, hy, hx + (hx - cx) / d * 60, hy + (hy - cy) / d * 60);
+      const hx = sh.x + sh.width / 2, hy = sh.y + sh.height / 2; const d = Math.hypot(hx - cx2, hy - cy2) || 1;
+      await h.drag(hx, hy, hx + (hx - cx2) / d * 60, hy + (hy - cy2) / d * 60);
     }
     sel = await h.selected();
     assert(sel.size > before, '크기 손잡이로 확대');
+    // 휠: 페이지는 안 움직이고 크기만 변함
+    { const b3 = await h.canvasBox(); await pg.mouse.move(b3.x + b3.width / 2, b3.y + b3.height / 2); const y0 = await pg.evaluate(() => window.scrollY); const s0 = (await h.selected()).size;
+      await pg.mouse.wheel(0, 300); await pg.waitForTimeout(150);
+      const y1 = await pg.evaluate(() => window.scrollY); const s1 = (await h.selected()).size;
+      assert(y1 === y0, `휠 시 페이지 스크롤됨 (${y0}→${y1})`); assert(s1 < s0, '휠로 크기 축소'); }
     // 키보드: 이동·복제·순서·삭제
     await pg.locator('svg.composer-svg').click({ position: { x: 40, y: 40 } }); // 빈 곳 → 선택 해제
     await pg.locator('.layer-row').first().click(); sel = await h.selected(); const x0 = sel.x;
@@ -282,9 +302,13 @@ async function runElectron() {
     let app;
     try {
       app = await _electron.launch({ executablePath: require(path.join(PROJECT, 'node_modules', 'electron')), args: [PROJECT, '--no-sandbox', '--disable-gpu'], cwd: PROJECT, timeout: 90000, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' } });
+      const dlDir = fs.mkdtempSync(path.join(TMP, 'electron-dl-'));
+      await app.evaluate(({ session }, dir) => {
+        session.defaultSession.on('will-download', (_e, item) => { item.setSavePath(require('path').join(dir, Date.now() + '-' + item.getFilename())); });
+      }, dlDir);
       const pg = await app.firstWindow();
       await pg.waitForLoadState('networkidle');
-      const h = helpers(pg, false);
+      const h = helpers(pg, false, dlDir);
       for (const name of ['keypad', 'canvasOps', 'cropExport', 'pattern', 'card']) {
         await pg.evaluate(() => localStorage.clear()); await pg.reload({ waitUntil: 'networkidle' });
         const errors = []; pg.on('pageerror', e => errors.push(String(e)));

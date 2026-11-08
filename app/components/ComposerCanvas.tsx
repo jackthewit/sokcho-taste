@@ -156,13 +156,22 @@ export default function ComposerCanvas({ showCrop = true }: { showCrop?: boolean
     return () => window.removeEventListener('keydown', onKey);
   }, [state.selectedId, state.layers, dispatch]);
 
-  // 휠로 선택 레이어 크기 조절
-  const onWheel = (e: React.WheelEvent) => {
-    if (!selected) return;
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.05 : 0.95;
-    dispatch({ type: 'UPDATE_LAYER', payload: { id: selected.id, patch: { size: clamp(selected.size * factor, 0.3, 30) } } });
-  };
+  // 휠로 선택 레이어 크기 조절 — 캔버스 위에서는 페이지 스크롤을 막아야 하므로 passive 가 아닌 리스너로 직접 등록
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault(); // 캔버스 위에서는 브라우저 스크롤 금지
+      const sel = selectedRef.current;
+      if (!sel) return;
+      const factor = e.deltaY < 0 ? 1.05 : 0.95;
+      dispatch({ type: 'UPDATE_LAYER', payload: { id: sel.id, patch: { size: clamp(sel.size * factor, 0.3, 30) } } });
+    };
+    svg.addEventListener('wheel', onWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', onWheel);
+  }, [dispatch]);
 
   const crop = showCrop ? state.crop : null;
   const transparent = state.background === 'transparent';
@@ -173,7 +182,6 @@ export default function ComposerCanvas({ showCrop = true }: { showCrop?: boolean
       viewBox={`0 0 ${CANVAS} ${CANVAS}`}
       className={`composer-svg ${drag ? 'dragging' : ''}`}
       onPointerDown={() => dispatch({ type: 'SELECT_LAYER', payload: null })}
-      onWheel={onWheel}
     >
       <defs>
         <pattern id="checker" width="40" height="40" patternUnits="userSpaceOnUse">

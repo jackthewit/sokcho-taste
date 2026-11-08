@@ -39,6 +39,27 @@ export function cardColors(state: SenseState) {
   return { bg, text, muted, accent, point, dark };
 }
 
+/** 글자 폭 어림값(em) — 한글 0.95, 대문자 0.68, 소문자·숫자 0.55, 공백 0.3 */
+export function estimateWidth(text: string, size: number, letterSpacing = 0): number {
+  let w = 0;
+  for (const ch of text) {
+    if (/[\u3131-\u318E\uAC00-\uD7A3\u4E00-\u9FFF\u3040-\u30FF]/.test(ch)) w += 0.95;
+    else if (/[A-Z]/.test(ch)) w += 0.68;
+    else if (/[a-z0-9@]/.test(ch)) w += 0.55;
+    else if (ch === ' ') w += 0.3;
+    else w += 0.4;
+    w += letterSpacing;
+  }
+  return w * size;
+}
+
+/** 주어진 폭에 들어가도록 글자 크기를 줄임 */
+export function fitSize(text: string, maxWidth: number, size: number, minSize: number, letterSpacing = 0): number {
+  const w = estimateWidth(text, size, letterSpacing);
+  if (w <= maxWidth) return size;
+  return Math.max(minSize, Math.floor(size * maxWidth / w));
+}
+
 function lines(s: string): string[] {
   return s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 }
@@ -72,8 +93,10 @@ export function buildInfoDoc(state: SenseState, uid = 'info'): CardDoc {
   const f = card.fields;
   const isStore = card.kind === 'store';
 
-  const T = (text: string, x: number, y: number, size: number, weight: 400 | 700, anchor: TextSpec['anchor'] = 'start', fill = c.text, letterSpacing = 0) => {
-    if (text && text.trim()) texts.push({ text, x: x + off, y: y + off, size, weight, anchor, fill, letterSpacing });
+  const T = (text: string, x: number, y: number, size: number, weight: 400 | 700, anchor: TextSpec['anchor'] = 'start', fill = c.text, letterSpacing = 0, maxWidth?: number) => {
+    if (!text || !text.trim()) return;
+    const fitted = maxWidth ? fitSize(text, maxWidth, size, Math.max(10, Math.round(size * 0.4)), letterSpacing) : size;
+    texts.push({ text, x: x + off, y: y + off, size: fitted, weight, anchor, fill, letterSpacing });
   };
   const rect = (x: number, y: number, w: number, h: number, fill: string) =>
     `<rect x="${x + off}" y="${y + off}" width="${w}" height="${h}" fill="${fill}"/>`;
@@ -87,81 +110,81 @@ export function buildInfoDoc(state: SenseState, uid = 'info'): CardDoc {
 
     if (card.layout === 'A') {
       // 왼쪽 정렬 · 상단 이름, 하단 연락처
-      T(headline, 60, 150, 46, 700);
+      T(headline, 60, 150, 46, 700, 'start', c.text, 0, 680);
       T(f.nameEn, 60, 186, 15, 400, 'start', c.muted, 0.1);
-      T(sub, 60, 226, 18, 400, 'start', c.muted);
+      T(sub, 60, 226, 18, 400, 'start', c.muted, 0, 680);
       markup += rect(60, 250, 56, 3, c.point);
       let y = 500 - 60 - (contacts.length + addr.length - 1) * 27;
       y = Math.max(y, 300);
-      contacts.forEach(l => { T(l.label, 60, y, 15, 700, 'start', c.point); T(l.value, 86, y, 17, 400); y += 27; });
-      addr.forEach(a => { T(a, 60, y, 15, 400, 'start', c.muted); y += 24; });
+      contacts.forEach(l => { T(l.label, 60, y, 15, 700, 'start', c.point); T(l.value, 86, y, 17, 400, 'start', c.text, 0, 740); y += 27; });
+      addr.forEach(a => { T(a, 60, y, 15, 400, 'start', c.muted, 0, 780); y += 24; });
       markup += glyphMark(state, 790, 90, 74, c.point);
     } else if (card.layout === 'B') {
       // 가운데 정렬
-      T(headline, 450, 212, 48, 700, 'middle');
+      T(headline, 450, 212, 48, 700, 'middle', c.text, 0, 800);
       T(f.nameEn, 450, 246, 14, 400, 'middle', c.muted, 0.14);
-      T(sub, 450, 284, 18, 400, 'middle', c.muted);
+      T(sub, 450, 284, 18, 400, 'middle', c.muted, 0, 800);
       markup += rect(430, 312, 40, 3, c.point);
       const row1 = contacts.filter(l => l.label === 'M' || l.label === 'E').map(l => l.value).join('   ·   ');
       const row2 = contacts.filter(l => l.label === '@' || l.label === 'W').map(l => (l.label === '@' ? '@' : '') + l.value).join('   ·   ');
       let y = 372;
-      if (row1) { T(row1, 450, y, 16, 400, 'middle'); y += 26; }
-      if (row2) { T(row2, 450, y, 16, 400, 'middle'); y += 26; }
-      addr.forEach(a => { T(a, 450, y, 14, 400, 'middle', c.muted); y += 22; });
+      if (row1) { T(row1, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
+      if (row2) { T(row2, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
+      addr.forEach(a => { T(a, 450, y, 14, 400, 'middle', c.muted, 0, 820); y += 22; });
       markup += glyphMark(state, 450, 100, 56, c.point);
     } else {
       // 세로 포인트 바 + 흐린 큰 글리프
       markup += `<rect x="${off}" y="${off}" width="14" height="${CARD_H}" fill="${c.point}"/>`;
       markup += `<clipPath id="${uid}-clip"><rect x="${off}" y="${off}" width="${CARD_W}" height="${CARD_H}"/></clipPath>`;
       markup += `<g clip-path="url(#${uid}-clip)">${glyphMark(state, 800 + off, 430 + off, 300, c.point, c.dark ? 0.22 : 0.14)}</g>`;
-      T(headline, 72, 124, 44, 700);
+      T(headline, 72, 124, 44, 700, 'start', c.text, 0, 760);
       T(f.nameEn, 72, 158, 14, 400, 'start', c.muted, 0.1);
-      T(sub, 72, 196, 18, 400, 'start', c.muted);
+      T(sub, 72, 196, 18, 400, 'start', c.muted, 0, 760);
       let y = 500 - 56 - (contacts.length + addr.length - 1) * 26;
       y = Math.max(y, 260);
-      contacts.forEach(l => { T(l.label, 72, y, 14, 700, 'start', c.point); T(l.value, 96, y, 16, 400); y += 26; });
-      addr.forEach(a => { T(a, 72, y, 14, 400, 'start', c.muted); y += 22; });
+      contacts.forEach(l => { T(l.label, 72, y, 14, 700, 'start', c.point); T(l.value, 96, y, 16, 400, 'start', c.text, 0, 720); y += 26; });
+      addr.forEach(a => { T(a, 72, y, 14, 400, 'start', c.muted, 0, 760); y += 22; });
     }
   } else {
     // ─── 가게용: 가게 이름을 크게 ───
     const owner = [f.name, f.title].filter(Boolean).join(' ');
     const extra = lines(f.hours);
     if (card.layout === 'A') {
-      T(f.storeName, 60, 182, 72, 700);
+      T(f.storeName, 60, 182, 72, 700, 'start', c.text, 0, 680);
       T(f.storeNameEn, 60, 218, 15, 400, 'start', c.muted, 0.14);
-      T(f.storeSub, 60, 256, 18, 400, 'start', c.muted);
+      T(f.storeSub, 60, 256, 18, 400, 'start', c.muted, 0, 680);
       markup += rect(60, 282, 56, 3, c.point);
       const total = (owner ? 1 : 0) + contacts.length + addr.length + extra.length;
       let y = Math.max(320, 500 - 56 - (total - 1) * 26);
       if (owner) { T(owner, 60, y, 17, 700); y += 26; }
-      contacts.forEach(l => { T(l.label, 60, y, 14, 700, 'start', c.point); T(l.value, 84, y, 16, 400); y += 26; });
-      addr.forEach(a => { T(a, 60, y, 14, 400, 'start', c.muted); y += 22; });
-      extra.forEach(a => { T(a, 60, y, 14, 400, 'start', c.muted); y += 22; });
+      contacts.forEach(l => { T(l.label, 60, y, 14, 700, 'start', c.point); T(l.value, 84, y, 16, 400, 'start', c.text, 0, 740); y += 26; });
+      addr.forEach(a => { T(a, 60, y, 14, 400, 'start', c.muted, 0, 780); y += 22; });
+      extra.forEach(a => { T(a, 60, y, 14, 400, 'start', c.muted, 0, 780); y += 22; });
       markup += glyphMark(state, 790, 90, 74, c.point);
     } else if (card.layout === 'B') {
       markup += glyphMark(state, 450, 92, 60, c.point);
-      T(f.storeName, 450, 228, 76, 700, 'middle');
+      T(f.storeName, 450, 228, 76, 700, 'middle', c.text, 0, 800);
       T(f.storeNameEn, 450, 262, 14, 400, 'middle', c.muted, 0.16);
-      T(f.storeSub, 450, 298, 18, 400, 'middle', c.muted);
+      T(f.storeSub, 450, 298, 18, 400, 'middle', c.muted, 0, 800);
       markup += rect(430, 324, 40, 3, c.point);
       let y = 372;
       const row1 = [owner, ...contacts.filter(l => l.label === 'M').map(l => l.value)].filter(Boolean).join('   ·   ');
       const row2 = contacts.filter(l => l.label !== 'M').map(l => (l.label === '@' ? '@' : '') + l.value).join('   ·   ');
-      if (row1) { T(row1, 450, y, 16, 400, 'middle'); y += 26; }
-      if (row2) { T(row2, 450, y, 16, 400, 'middle'); y += 26; }
-      [...addr, ...extra].forEach(a => { T(a, 450, y, 14, 400, 'middle', c.muted); y += 22; });
+      if (row1) { T(row1, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
+      if (row2) { T(row2, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
+      [...addr, ...extra].forEach(a => { T(a, 450, y, 14, 400, 'middle', c.muted, 0, 820); y += 22; });
     } else {
       markup += `<rect x="${off}" y="${off}" width="14" height="${CARD_H}" fill="${c.point}"/>`;
       markup += `<clipPath id="${uid}-clip"><rect x="${off}" y="${off}" width="${CARD_W}" height="${CARD_H}"/></clipPath>`;
       markup += `<g clip-path="url(#${uid}-clip)">${glyphMark(state, 800 + off, 430 + off, 300, c.point, c.dark ? 0.22 : 0.14)}</g>`;
-      T(f.storeName, 72, 150, 64, 700);
+      T(f.storeName, 72, 150, 64, 700, 'start', c.text, 0, 760);
       T(f.storeNameEn, 72, 184, 14, 400, 'start', c.muted, 0.14);
-      T(f.storeSub, 72, 222, 18, 400, 'start', c.muted);
+      T(f.storeSub, 72, 222, 18, 400, 'start', c.muted, 0, 760);
       const total = (owner ? 1 : 0) + contacts.length + addr.length + extra.length;
       let y = Math.max(280, 500 - 56 - (total - 1) * 26);
       if (owner) { T(owner, 72, y, 16, 700); y += 26; }
-      contacts.forEach(l => { T(l.label, 72, y, 14, 700, 'start', c.point); T(l.value, 96, y, 16, 400); y += 26; });
-      [...addr, ...extra].forEach(a => { T(a, 72, y, 14, 400, 'start', c.muted); y += 22; });
+      contacts.forEach(l => { T(l.label, 72, y, 14, 700, 'start', c.point); T(l.value, 96, y, 16, 400, 'start', c.text, 0, 720); y += 26; });
+      [...addr, ...extra].forEach(a => { T(a, 72, y, 14, 400, 'start', c.muted, 0, 760); y += 22; });
     }
   }
 
