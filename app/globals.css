@@ -137,8 +137,7 @@ body::before {
     grid-template-columns: 1.3fr 1fr; /* Gallery oriented distribution */
     grid-template-rows: 1fr;
     gap: 40px;
-    height: calc(100vh - 180px);
-    min-height: 850px;
+    align-items: start;
   }
 
   .left-panel {
@@ -567,6 +566,7 @@ body::before {
 .preview-card-wrap {
   position: relative;
   width: 100%;
+  min-width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1806,7 +1806,7 @@ body::before {
 .full-box { min-height: 70vh; }
 
 /* 조합 캔버스 */
-.composer-wrap { background: #ededed; border-radius: 24px; aspect-ratio: 1 / 1; max-height: 70vh; margin: 0 auto; width: auto; }
+.composer-wrap { background: #ededed; border-radius: 24px; aspect-ratio: 1 / 1; width: min(100%, 72vh); height: auto; max-height: none; flex: 0 0 auto; margin: 0 auto; overflow: hidden; }
 .composer-svg { width: 100%; height: 100%; display: block; touch-action: none; user-select: none; cursor: default; }
 .composer-svg.dragging { cursor: grabbing; }
 .layer-path { cursor: grab; transition: filter var(--transition-fast); }
@@ -1885,7 +1885,7 @@ body::before {
 /* 패턴화 */
 .pattern-view, .card-view { display: grid; grid-template-columns: 1fr 340px; gap: 32px; }
 @media (max-width: 1023px) { .pattern-view, .card-view { grid-template-columns: 1fr; } }
-.pattern-stage { background: #ededed; border-radius: 24px; aspect-ratio: 1 / 1; max-height: 68vh; margin: 0 auto; width: auto; padding: 16px; }
+.pattern-stage { background: #ededed; border-radius: 24px; aspect-ratio: 1 / 1; width: min(100%, 68vh); height: auto; max-height: none; flex: 0 0 auto; margin: 0 auto; padding: 16px; overflow: hidden; }
 .svg-host { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 .svg-host svg { width: 100%; height: 100%; max-height: 100%; }
 .garment-strip { display: flex; gap: 10px; margin-top: 16px; overflow-x: auto; padding-bottom: 4px; }
@@ -1925,12 +1925,16 @@ body::before {
 
 /* 키패드 미니 버튼 (+ / −) */
 .keypad-key { position: relative; }
-.key-mini-actions { position: absolute; left: 6px; bottom: 6px; display: flex; gap: 3px; opacity: 0; transition: opacity var(--transition-fast); }
+.key-mini-actions { position: absolute; right: 6px; top: 6px; display: flex; gap: 3px; opacity: 0; transition: opacity var(--transition-fast); }
 .keypad-key:hover .key-mini-actions, .keypad-key.active .key-mini-actions { opacity: 1; }
-.key-mini-actions span { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.15); background: #fff; color: #111; font-size: 0.8rem; font-weight: 900; line-height: 1; cursor: pointer; padding: 0; }
+.key-mini-actions span { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.15); background: #fff; color: #111; font-size: 0.8rem; font-weight: 900; line-height: 1; cursor: pointer; padding: 0; }
 .key-mini-actions span:hover { background: #111; color: var(--color-neon); border-color: #111; }
 
 /* 캔버스 히트 영역·자석 가이드 */
 .layer-hit { cursor: grab; }
 .selection-box { cursor: move; }
 .snap-guide { stroke: #ff2d9b; stroke-width: 1.5; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; pointer-events: none; }
+
+/* 레이아웃 안전장치: 패널이 서로 겹치지 않게 */
+.left-panel, .right-panel, .dashboard-box { min-width: 0; }
+.output-box { overflow: hidden; }
