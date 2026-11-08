@@ -47,15 +47,15 @@ function pngSize(file) {
 function helpers(pg, touch) {
   const key = (l) => pg.locator(`button.keypad-key:has(.key-label:text-is("${l}"))`).first();
   const tab = (l) => pg.locator('.mode-tab', { hasText: l }).click();
-  const state = () => pg.evaluate(() => JSON.parse(localStorage.getItem('sokcho-bi-composer-v2') || 'null'));
+  const state = async () => { await pg.waitForTimeout(80); return pg.evaluate(() => JSON.parse(localStorage.getItem('sokcho-bi-composer-v2') || 'null')); };
   const selected = async () => { const s = await state(); return s && s.layers.find(l => l.id === s.selectedId); };
   const canvasBox = () => pg.locator('svg.composer-svg').boundingBox();
   const toPx = async (x, y) => { const b = await canvasBox(); return [b.x + b.width * x / 1000, b.y + b.height * y / 1000]; };
   async function drag(x1, y1, x2, y2, steps = 8) {
     if (touch) {
       // 터치 끌기: pointer 이벤트로 흉내 (CDP 터치 → pointer 변환이 안정적이지 않아 직접 dispatch)
-      const svg = pg.locator('svg.composer-svg');
-      await svg.dispatchEvent('pointerdown', { clientX: x1, clientY: y1, pointerId: 1, pointerType: 'touch', isPrimary: true, button: 0, bubbles: true });
+      // 손가락이 닿은 지점의 실제 요소에 pointerdown (글리프·크롭 손잡이 등)
+      await pg.evaluate(([x, y]) => { const el = document.elementFromPoint(x, y); el && el.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true, button: 0, bubbles: true })); }, [x1, y1]);
       for (let i = 1; i <= steps; i++) { const t = i / steps; await pg.evaluate(([x, y]) => window.dispatchEvent(new PointerEvent('pointermove', { clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', bubbles: true })), [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t]); }
       await pg.evaluate(() => window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'touch', bubbles: true })));
     } else {
@@ -100,10 +100,14 @@ const scenarios = {
     assert(Math.round(sel.rotation) === 90, `90° 스냅 기대, ${sel.rotation}`);
     // 크기 손잡이
     const sh = await pg.locator('.scale-handle').boundingBox(); const before = sel.size;
-    await h.drag(sh.x + sh.width / 2, sh.y + sh.height / 2, sh.x + sh.width / 2 + 60, sh.y + sh.height / 2 + 60); sel = await h.selected();
+    { // 중심에서 손잡이 방향으로 60px 더 바깥쪽으로 끌기
+      const hx = sh.x + sh.width / 2, hy = sh.y + sh.height / 2; const d = Math.hypot(hx - cx, hy - cy) || 1;
+      await h.drag(hx, hy, hx + (hx - cx) / d * 60, hy + (hy - cy) / d * 60);
+    }
+    sel = await h.selected();
     assert(sel.size > before, '크기 손잡이로 확대');
     // 키보드: 이동·복제·순서·삭제
-    await pg.locator('svg.composer-svg').click({ position: { x: 5, y: 5 } }); // 빈 곳 → 선택 해제
+    await pg.locator('svg.composer-svg').click({ position: { x: 40, y: 40 } }); // 빈 곳 → 선택 해제
     await pg.locator('.layer-row').first().click(); sel = await h.selected(); const x0 = sel.x;
     await pg.keyboard.press('ArrowRight'); sel = await h.selected(); assert(sel.x === x0 + 4, '방향키 이동');
     await pg.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d'); let s = await h.state(); assert(s.layers.length === 3, '복제');
@@ -241,7 +245,10 @@ const ENVS = [
 
 async function runWeb() {
   const root = await serve(ROOT, '/');
-  const sub = await serve(ROOT, '/sokcho-taste/');
+  // 하위 경로 환경은 실제 배포와 같이 make-relative 를 거친 결과를 서비스
+  const SITE = path.join(TMP, 'site');
+  execFileSync('node', [path.join(__dirname, 'make-relative.js'), ROOT, SITE], { stdio: 'inherit' });
+  const sub = await serve(SITE, '/sokcho-taste/');
   const browser = await chromium.launch();
   for (const env of ENVS) {
     for (let round = 1; round <= ROUNDS; round++) {
@@ -274,7 +281,7 @@ async function runElectron() {
   for (let round = 1; round <= ROUNDS; round++) {
     let app;
     try {
-      app = await _electron.launch({ args: ['--no-sandbox', '--disable-gpu', PROJECT], cwd: PROJECT, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' } });
+      app = await _electron.launch({ executablePath: require(path.join(PROJECT, 'node_modules', 'electron')), args: [PROJECT, '--no-sandbox', '--disable-gpu'], cwd: PROJECT, timeout: 90000, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' } });
       const pg = await app.firstWindow();
       await pg.waitForLoadState('networkidle');
       const h = helpers(pg, false);
