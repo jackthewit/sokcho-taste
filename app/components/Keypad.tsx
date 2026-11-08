@@ -36,7 +36,7 @@ export default function Keypad() {
               title={isGlyph ? `${item.label} 추가 (현재 ${count}개)` : isClear ? '모든 레이어 지우기' : ''}
               onClick={() => {
                 if (isClear) {
-                  if (state.layers.length && window.confirm('모든 레이어를 지울까요? (Cmd/Ctrl+Z로 되돌릴 수 있음)')) dispatch({ type: 'RESET' });
+                  if (state.layers.length && window.confirm('캔버스의 모든 레이어를 지울까요? (작업 기록은 유지되며 Cmd/Ctrl+Z로 되돌릴 수 있음)')) dispatch({ type: 'RESET' });
                 } else if (isGlyph) {
                   const same = state.layers.filter(l => l.type === item.value);
                   if (same.length === 0) {

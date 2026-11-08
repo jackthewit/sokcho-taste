@@ -4,6 +4,7 @@
 import React, { createContext, useContext, useEffect, useReducer, type ReactNode } from 'react';
 import { Season, TasteType } from '../constants/colors';
 import { TextureType, IntensityLevel } from '../constants/keymap';
+import { createWork, loadWork, loadWorkLocal, loadWorkRemoteIfNewer, saveWork, currentWorkId, setCurrentWorkId, setActiveWorkId, type WorkData, type WorkDoc } from '../lib/works';
 
 export const CANVAS = 1000; // 조합 캔버스 좌표계 (정사각형)
 
@@ -338,39 +339,133 @@ function historyReducer(h: HistoryState, action: SenseAction): HistoryState {
 }
 
 // ─── Context ─────────────────────────────────────────────
+export interface WorkInfo { id: string; author: string; org: string; createdAt: number; }
+export type SaveStatus = 'idle' | 'saving' | 'cloud' | 'local' | 'error';
+
 interface SenseContextType {
   state: SenseState;
   dispatch: React.Dispatch<SenseAction>;
   canUndo: boolean;
   /** 드래그 시작 시점을 히스토리에 남기고 싶을 때 */
   snapshot: () => void;
+  // 작업(저장) 관리
+  work: WorkInfo | null;
+  ready: boolean;              // 시작 시 불러오기가 끝났는지
+  saveStatus: SaveStatus;
+  lastSavedAt: number | null;
+  startNewWork: (author: string, org: string) => Promise<void>;
+  openWork: (id: string) => Promise<boolean>;
+  closeWork: () => void;
 }
 
 const SenseContext = createContext<SenseContextType | undefined>(undefined);
-const STORAGE_KEY = 'sokcho-bi-composer-v2';
+const STORAGE_KEY = 'sokcho-bi-composer-v2'; // 작업이 없을 때의 임시 상태 보관용
+
+export function pickWorkData(s: SenseState): WorkData {
+  return { season: s.season, layers: s.layers, foodName: s.foodName, background: s.background, crop: s.crop, cropAspect: s.cropAspect, tile: s.tile, card: s.card };
+}
 
 export function SenseProvider({ children }: { children: ReactNode }) {
   const [h, dispatch] = useReducer(historyReducer, { present: initialState, past: [] });
+  const [work, setWork] = React.useState<WorkInfo | null>(null);
+  const [ready, setReady] = React.useState(false);
+  const [saveStatus, setSaveStatus] = React.useState<SaveStatus>('idle');
+  const [lastSavedAt, setLastSavedAt] = React.useState<number | null>(null);
+  const lastSavedJson = React.useRef<string>('');
+  const suppressSave = React.useRef(false); // 작업 전환 중 이전 작업에 저장되지 않도록
+  const pendingRef = React.useRef<{ id: string; data: WorkData } | null>(null);
 
-  // 저장된 작업 불러오기
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as SenseState;
-        if (parsed && Array.isArray(parsed.layers)) dispatch({ type: 'LOAD', payload: parsed });
-      }
-    } catch { /* 저장소를 못 읽어도 동작에는 지장 없음 */ }
+  const applyWork = React.useCallback((w: WorkDoc) => {
+    dispatch({ type: 'LOAD', payload: { ...initialState, ...w.data } as SenseState });
+    lastSavedJson.current = JSON.stringify(w.data);
+    setWork({ id: w.id, author: w.author, org: w.org, createdAt: w.createdAt });
+    setSaveStatus(w.cloud ? 'cloud' : 'local'); setLastSavedAt(w.updatedAt);
   }, []);
 
+  // 시작: 이어서 할 작업이 있으면 기기 저장본을 즉시 열고, 클라우드에 더 최근 것이 있으면 뒤이어 반영
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(h.present)); } catch { /* 무시 */ }
-  }, [h.present]);
+    let alive = true;
+    (async () => {
+      const id = currentWorkId();
+      if (id) {
+        const local = loadWorkLocal(id);
+        if (local) { applyWork(local); setReady(true); }
+        const w = local ? await loadWorkRemoteIfNewer(id, local.updatedAt) : await loadWork(id);
+        if (!alive) return;
+        if (w) applyWork(w);
+        if (local || w) { setReady(true); return; }
+        setCurrentWorkId(null);
+      }
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) { const parsed = JSON.parse(raw) as SenseState; if (parsed && Array.isArray(parsed.layers)) dispatch({ type: 'LOAD', payload: parsed }); }
+      } catch { /* 무시 */ }
+      setReady(true);
+    })();
+    return () => { alive = false; };
+  }, [applyWork]);
+
+  // 자동 저장 (변경 후 1.2초 뒤)
+  useEffect(() => {
+    if (!ready) return;
+    const data = pickWorkData(h.present);
+    const json = JSON.stringify(data);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(h.present)); } catch { /* 무시 */ } // 임시 상태(작업이 없을 때 복구용)
+    if (!work || suppressSave.current) return;
+    if (json === lastSavedJson.current) return;
+    setSaveStatus('saving');
+    pendingRef.current = { id: work.id, data };
+    const t = setTimeout(async () => {
+      pendingRef.current = null;
+      let thumb: string | undefined;
+      try {
+        const { buildCompositionSVG } = await import('../lib/svgBuilder');
+        if (data.layers.length) { const svg = buildCompositionSVG(h.present, { region: data.crop, pixelWidth: 160 }); if (svg.length < 60000) thumb = svg; }
+      } catch { /* 썸네일 실패는 무시 */ }
+      const r = await saveWork(work.id, data, thumb);
+      lastSavedJson.current = json;
+      setSaveStatus(r.cloud ? 'cloud' : 'local'); setLastSavedAt(Date.now());
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [h.present, work, ready]);
+
+  const startNewWork = React.useCallback(async (author: string, org: string) => {
+    const fresh: SenseState = { ...initialState, season: h.present.season };
+    suppressSave.current = true; // 이전 작업에 빈 상태가 저장되지 않도록
+    pendingRef.current = null;
+    dispatch({ type: 'LOAD', payload: fresh });
+    const data = pickWorkData(fresh);
+    lastSavedJson.current = JSON.stringify(data);
+    try {
+      const w = await createWork(author, org, data);
+      applyWork({ ...w, data });
+    } finally { suppressSave.current = false; }
+  }, [h.present.season, applyWork]);
+
+  const openWork = React.useCallback(async (id: string) => {
+    const local = loadWorkLocal(id);
+    const w = local ? ((await loadWorkRemoteIfNewer(id, local.updatedAt)) || local) : await loadWork(id);
+    if (!w) return false;
+    pendingRef.current = null;
+    applyWork(w);
+    setCurrentWorkId(id);
+    return true;
+  }, [applyWork]);
+
+  useEffect(() => {
+    const flush = () => { const p = pendingRef.current; if (p) { pendingRef.current = null; void saveWork(p.id, p.data); } };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+    return () => { window.removeEventListener('pagehide', flush); };
+  }, []);
+
+  const closeWork = React.useCallback(() => { setWork(null); setCurrentWorkId(null); setSaveStatus('idle'); }, []);
+  useEffect(() => { setActiveWorkId(work?.id ?? null); }, [work]);
 
   const snapshot = React.useCallback(() => dispatch({ type: 'SNAPSHOT' }), []);
 
   return (
-    <SenseContext.Provider value={{ state: h.present, dispatch, canUndo: h.past.length > 0, snapshot }}>
+    <SenseContext.Provider value={{ state: h.present, dispatch, canUndo: h.past.length > 0, snapshot, work, ready, saveStatus, lastSavedAt, startNewWork, openWork, closeWork }}>
       {children}
     </SenseContext.Provider>
   );

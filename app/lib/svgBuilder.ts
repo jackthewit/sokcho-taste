@@ -3,6 +3,7 @@ import { SEASONAL_COLORS } from '../constants/colors';
 import { TEXTURE_COLOR } from '../constants/keymap';
 import { getGlyphPath } from './glyphs';
 import { CANVAS, type CropRect, type Layer, type SenseState, type TasteKey, type TileMode } from '../context/SenseContext';
+import { noteExport } from './works';
 
 export const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -182,6 +183,7 @@ export function buildTileSheetSVG(state: SenseState, crop: CropRect, opts: { wid
 
 // ─── 다운로드 도우미 ─────────────────────────────────────
 export function downloadText(filename: string, content: string, mime = 'image/svg+xml;charset=utf-8') {
+  noteExport(filename);
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -205,6 +207,7 @@ export async function svgToPngBlob(svg: string, width: number, height: number): 
 }
 
 export async function downloadPng(filename: string, svg: string, width: number, height: number) {
+  noteExport(filename);
   const blob = await svgToPngBlob(svg, width, height);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

@@ -8,6 +8,7 @@ import Keypad from './components/Keypad';
 import ControlPanel from './components/ControlPanel';
 import PatternView from './components/PatternView';
 import CardView from './components/CardView';
+import WorkBar from './components/WorkBar';
 
 type Mode = 'compose' | 'pattern' | 'card';
 const MODES: { id: Mode; label: string; sub: string }[] = [
@@ -29,6 +30,8 @@ export default function Home() {
           </h1>
           <p className="app-subtitle">음식문화도시 속초 · 감각 시각화 시스템</p>
         </header>
+
+        <WorkBar />
 
         <div className="top-controls">
           <SeasonSelector />

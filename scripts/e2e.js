@@ -63,6 +63,11 @@ function helpers(pg, touch, electronDir) {
     }
   }
   const fill = (label, v) => pg.locator(`.field:has(span:text-is("${label}")) :is(input,textarea)`).fill(v);
+  /** 시작 대화창이 떠 있으면 이름을 넣고 시작 */
+  async function boot(author = '테스터') {
+    const dlg = pg.locator('.modal:has-text("새 작업 시작")');
+    if (await dlg.count()) { await dlg.locator('input').first().fill(author); await dlg.locator('button', { hasText: '시작하기' }).click(); await dlg.waitFor({ state: 'detached', timeout: 15000 }); }
+  }
   async function download(trigger) {
     if (electronDir) {
       // Electron: will-download 로 저장 폴더에 바로 저장되므로 새 파일이 생길 때까지 기다림
@@ -80,7 +85,7 @@ function helpers(pg, touch, electronDir) {
     const fn = path.join(TMP, `${Date.now()}-${Math.random().toString(36).slice(2)}-${d.suggestedFilename()}`);
     await d.saveAs(fn); return fn;
   }
-  return { key, tab, state, selected, canvasBox, toPx, drag, fill, download };
+  return { key, tab, state, selected, canvasBox, toPx, drag, fill, download, boot };
 }
 
 // ─── 시나리오 ─────────────────────────────────────────────
@@ -163,12 +168,14 @@ const scenarios = {
     const hd = await pg.locator('.crop-se').boundingBox();
     await h.drag(hd.x + 12, hd.y + 12, hd.x - 60, hd.y - 60); s = await h.state(); assert(Math.abs(s.crop.w / s.crop.h - 1.8) < 0.02, '비율 유지된 크기 조절');
     // 크롭 이동
-    const c = s.crop; const [mx, my] = await h.toPx(c.x + c.w / 2, c.y + c.h / 2);
+    await pg.locator('svg.composer-svg').scrollIntoViewIfNeeded();
+    const c = s.crop; const [mx, my] = await h.toPx(c.x + c.w * 0.3, c.y + c.h * 0.3);
     await h.drag(mx, my, mx + 30, my + 30); const s2 = await h.state(); assert(s2.crop.x !== c.x, '크롭 이동');
     const f1 = await h.download(() => pg.locator('.export-group:has-text("전체") .svg-btn').click()); checkSvg(f1, { minPaths: 3 });
     const f2 = await h.download(() => pg.locator('.export-group:has-text("크롭 영역") .svg-btn').click()); const svg = fs.readFileSync(f2, 'utf8'); assert(/viewBox="[\d.]+ [\d.]+ [\d.]+ [\d.]+"/.test(svg) && !svg.includes('viewBox="0 0 1000 1000"'), '크롭 viewBox');
     const f3 = await h.download(() => pg.locator('.export-group:has-text("크롭 영역") .db-btn').click()); const ps = pngSize(f3); assert(ps.w === 2400 && Math.abs(ps.h - 2400 / 1.8) <= 2, `PNG 크기 ${ps.w}x${ps.h}`);
-    await pg.reload({ waitUntil: 'networkidle' }); const s3 = await h.state(); assert(s3.layers.length === 3 && s3.crop, '새로고침 후 유지');
+    await pg.waitForFunction(() => /저장됨/.test(document.querySelector('.save-status')?.textContent || ''), null, { timeout: 20000 });
+    await pg.reload({ waitUntil: 'networkidle' }); await pg.locator('.work-info b').waitFor({ timeout: 15000 }); assert((await pg.locator('.modal').count()) === 0, '이어하기: 시작 창이 다시 뜨면 안 됨'); const s3 = await h.state(); assert(s3.layers.length === 3 && s3.crop, '새로고침 후 유지');
   },
   // S5: 패턴화 — 옷 5종 × 반복 3종, 밀도, 다운로드
   async pattern(pg, h) {
@@ -260,6 +267,31 @@ const scenarios = {
     }
     const s = await h.state(); assert(s && Array.isArray(s.layers), '상태 보존');
   },
+  // S9: 작업 저장 — 시작 기록 → 자동 저장 → 새로 만들기 → 기존 작업 열기
+  async works(pg, h) {
+    await h.key('단맛').click(); await h.key('짠맛').click();
+    await pg.waitForFunction(() => /저장됨/.test(document.querySelector('.save-status')?.textContent || ''), null, { timeout: 15000 });
+    const info = await pg.locator('.work-info').textContent(); assert(info.includes('테스터') && info.includes('시작'), `작업 정보 표시: ${info}`);
+    // 새로 만들기 → 다른 사람 이름
+    await pg.locator('.work-bar button', { hasText: '새로 만들기' }).click();
+    const dlg = pg.locator('.modal:has-text("새 작업 시작")'); await dlg.locator('input').first().fill('두번째'); await dlg.locator('input').nth(1).fill('속초식당');
+    await dlg.locator('button', { hasText: '시작하기' }).click(); await dlg.waitFor({ state: 'detached' });
+    let s = await h.state(); assert(s.layers.length === 0, '새 작업은 빈 캔버스');
+    await h.key('매운맛').click();
+    await pg.waitForFunction(() => /저장됨/.test(document.querySelector('.save-status')?.textContent || ''), null, { timeout: 15000 });
+    // 기존 작업 열기 → 첫 작업 선택
+    await pg.locator('.work-bar button', { hasText: '기존 작업 열기' }).click();
+    const list = pg.locator('.work-item'); await list.first().waitFor({ timeout: 15000 });
+    const n = await list.count(); assert(n >= 2, `목록에 2개 이상 (${n})`);
+    const first = pg.locator('.work-item:has-text("테스터")').first(); assert(await first.count() === 1, '첫 작업이 목록에 있음');
+    await first.locator('button').click(); await pg.locator('.modal').waitFor({ state: 'detached' });
+    s = await h.state(); assert(s.layers.length === 2, '첫 작업 복원(글리프 2개)');
+    const info2 = await pg.locator('.work-info').textContent(); assert(info2.includes('테스터'), '작업 정보가 첫 작업으로 바뀜');
+    // 새로고침 → 이어서
+    await pg.reload({ waitUntil: 'networkidle' }); await pg.locator('.work-info b').waitFor({ timeout: 15000 });
+    assert((await pg.locator('.modal').count()) === 0, '시작 창 없이 이어서');
+    s = await h.state(); assert(s.layers.length === 2, '새로고침 후 유지');
+  },
   // S8: 모바일 전용 — 가로 스크롤 없음, 탭 전환, 터치로 추가/선택
   async mobile(pg, h) {
     const sw = await pg.evaluate(() => document.documentElement.scrollWidth), vw = await pg.evaluate(() => window.innerWidth);
@@ -293,13 +325,15 @@ async function runWeb() {
     for (let round = 1; round <= ROUNDS; round++) {
       const ctx = await browser.newContext({ viewport: env.viewport, hasTouch: !!env.touch, isMobile: !!env.mobile, deviceScaleFactor: env.deviceScaleFactor || 1, acceptDownloads: true });
       const pg = await ctx.newPage();
-      const errors = []; pg.on('pageerror', e => errors.push(String(e))); pg.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-      const bad = []; pg.on('response', r => { if (r.status() >= 400) bad.push(r.status() + ' ' + r.url()); });
+      const ignorable = (t) => /ERR_TUNNEL|ERR_NAME_NOT_RESOLVED|ERR_INTERNET|firestore|googleapis|WebChannel|net::ERR/.test(t);
+      const errors = []; pg.on('pageerror', e => { if (!ignorable(String(e))) errors.push(String(e)); }); pg.on('console', m => { if (m.type() === 'error' && !ignorable(m.text())) errors.push(m.text()); });
+      const bad = []; pg.on('response', r => { if (r.status() >= 400 && !/googleapis|firestore/.test(r.url())) bad.push(r.status() + ' ' + r.url()); });
       await pg.goto(env.subpath ? sub.url : root.url, { waitUntil: 'networkidle' });
       const h = helpers(pg, !!env.touch);
-      const list = env.mobile ? ['mobile', 'keypad', 'cropExport', 'card', 'monkey'] : ['keypad', 'canvasOps', 'inspector', 'cropExport', 'pattern', 'card', 'monkey'];
+      const list = env.mobile ? ['mobile', 'keypad', 'cropExport', 'card', 'works', 'monkey'] : ['keypad', 'canvasOps', 'inspector', 'cropExport', 'pattern', 'card', 'works', 'monkey'];
       for (const name of list) {
         await pg.evaluate(() => localStorage.clear()); await pg.reload({ waitUntil: 'networkidle' });
+        await h.boot();
         errors.length = 0; bad.length = 0;
         try {
           const detail = await scenarios[name](pg, h, round);
@@ -330,8 +364,9 @@ async function runElectron() {
       await pg.waitForLoadState('networkidle');
       pg.on('dialog', d => d.accept().catch(() => {}));
       const h = helpers(pg, false, dlDir);
-      for (const name of ['keypad', 'canvasOps', 'cropExport', 'pattern', 'card']) {
+      for (const name of ['keypad', 'canvasOps', 'cropExport', 'pattern', 'card', 'works']) {
         await pg.evaluate(() => localStorage.clear()); await pg.reload({ waitUntil: 'networkidle' });
+        await h.boot();
         const errors = []; pg.on('pageerror', e => errors.push(String(e)));
         try { const d = await scenarios[name](pg, h, round); assert(errors.length === 0, `오류: ${errors[0]}`); record('데스크톱 앱(Electron)', name, round, true, d || ''); }
         catch (e) { await pg.screenshot({ path: path.join(TMP, `fail-electron-${name}-${round}.png`) }).catch(() => {}); record('데스크톱 앱(Electron)', name, round, false, e.message.split('\n').slice(0, 3).join(' | ').slice(0, 300)); }
