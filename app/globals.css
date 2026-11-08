@@ -1938,3 +1938,18 @@ body::before {
 /* 레이아웃 안전장치: 패널이 서로 겹치지 않게 */
 .left-panel, .right-panel, .dashboard-box { min-width: 0; }
 .output-box { overflow: hidden; }
+
+/* 명함 블록 편집 UI */
+.side-section { border: 1px solid #e6e6e6; border-radius: 12px; background: #fff; margin-top: 10px; }
+.side-section summary { cursor: pointer; padding: 10px 12px; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.12em; color: #555; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; }
+.side-section summary::after { content: '＋'; color: #999; }
+.side-section[open] summary::after { content: '－'; }
+.side-section-body { padding: 4px 12px 12px; }
+.block-controls { display: flex; flex-direction: column; gap: 4px; }
+.anchor-picker { display: grid; grid-template-columns: repeat(3, 26px); gap: 4px; }
+.anchor-cell { width: 26px; height: 18px; border-radius: 4px; border: 1px solid #ccc; background: #fafafa; cursor: pointer; }
+.anchor-cell:hover { border-color: #111; }
+.anchor-cell.on { background: #111; border-color: #111; }
+.seg.wrap { flex-wrap: wrap; }
+.card-side .prop { margin-top: 10px; }
+.card-side .check { margin-top: 10px; }

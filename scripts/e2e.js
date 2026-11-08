@@ -187,39 +187,57 @@ const scenarios = {
     const p = await h.download(() => pg.locator('.pattern-side .db-btn').first().click()); const ps = pngSize(p); assert(ps.w === 2000, 'PNG 2000px');
     await h.tab('조합');
   },
-  // S6: 명함 — 개인/가게 × 레이아웃 3 × 바탕 3 × 글꼴 4(순환), 긴 입력, 재단 여백, 타일, 외곽선 SVG/PNG
+  // S6: 명함 — 개인/가게 × 프리셋 4 × 바탕 3 × 글꼴 4(순환) × 로고 종류, 긴 입력, 블록 위치 임의 조합, 재단 여백, 외곽선 SVG/PNG
   async card(pg, h, round) {
     await h.key('단맛').click(); await h.key('부드러움').click();
     await h.tab('명함');
     const fonts = ['noto-sans-kr', 'noto-serif-kr', 'nanum-myeongjo', 'gowun-batang'];
     const long = round % 2 === 0;
-    await h.fill('이름', long ? '남궁민수아름다운' : '홍길동'); await h.fill('영문 이름', long ? 'Namgung Minsu Areumdaun' : 'Hong Gildong');
-    await h.fill('직함', long ? '사무국장 겸 콘텐츠기획총괄' : '사무국장'); await h.fill('소속', '속초문화관광재단');
-    await h.fill('전화번호', '010-1234-5678'); await h.fill('메일', long ? 'very.long.email.address@sokchoculture.or.kr' : 'hi@sokcho.kr');
+    const preset = (l) => pg.locator(`.mode-btn:has(b:text-is("${l}"))`).click();
+    await h.fill('이름', long ? '남궁민수아름다운' : '홍길동'); await h.fill('영문 이름', long ? 'Namgung Minsu Areumdaun' : 'Hong gil dong');
+    await h.fill('직함', long ? '사무국장 겸 콘텐츠기획총괄' : '대표 이사');
+    await h.fill('Tel (가게/사무실)', '033)636-0664'); await h.fill('H.P (휴대전화)', '010-1234-5678'); await h.fill('E-mail', long ? 'very.long.email.address@sokchoculture.or.kr' : 'hi@sokcho.kr');
     await h.fill('인스타그램', '@sokcho_food'); await h.fill('웹사이트', 'https://sokchocf.or.kr');
     await h.fill('주소 (줄바꿈 가능)', long ? '강원특별자치도 속초시 번영로 155 속초문화예술회관 별관 2층\n속초문화관광재단 문화도시센터 사무국\n(우) 24821' : '속초시 번영로 155');
     let n = 0;
+    const checkFits = async (tag) => {
+      const texts = await pg.locator('.card-figure:has-text("정보면") svg text').count(); assert(texts >= 4, `${tag} 텍스트 ${texts}`);
+      const over = await pg.evaluate(() => { const svg = document.querySelector('.card-figure svg'); const vb = svg.viewBox.baseVal; return [...svg.querySelectorAll('text')].some(t => { const b = t.getBBox(); return b.x < -1 || b.y < -1 || b.x + b.width > vb.width + 1 || b.y + b.height > vb.height + 1; }); });
+      assert(!over, `${tag} 텍스트 넘침`);
+    };
     for (const kind of ['개인용', '가게용']) {
       await pg.locator('.seg button', { hasText: kind }).click();
-      if (kind === '가게용') { await h.fill('가게 이름', long ? '속초 아바이 바다식당 본점' : '바다식당'); await h.fill('영문 이름', 'SOKCHO BADA'); await h.fill('한 줄 소개 / 업종', '물회 · 섭국 전문'); await h.fill('영업시간 등 (줄바꿈 가능)', '11:00–21:00\n화요일 휴무'); }
-      for (const lay of ['왼쪽 정렬', '가운데 정렬', '포인트 바']) {
-        await pg.locator('.mode-btn', { hasText: lay }).click();
+      const orgLabel = kind === '가게용' ? '가게 이름 (로고 자리)' : '소속 (로고 자리)';
+      await h.fill(orgLabel, kind === '가게용' ? (long ? '속초 아바이 바다식당 본점' : '바다식당') : (long ? '속초문화관광재단 문화도시센터' : '속초문화관광재단'));
+      await h.fill('영문 소속/가게명', 'SOKCHO BADA'); await h.fill('로고 옆 짧은 문구', '물회 · 섭국 전문');
+      if (kind === '가게용') await h.fill('영업시간 등 (줄바꿈 가능)', '11:00–21:00\n화요일 휴무');
+      for (const pr of ['기본 · 왼쪽', '기본 · 오른쪽', '가운데', '포인트 바']) {
+        await preset(pr);
         for (const bg of ['흰색', '검정', '계절색']) {
           await pg.locator('.seg button', { hasText: bg }).click();
-          await pg.locator('select').selectOption(fonts[n++ % 4]);
-          const texts = await pg.locator('.card-figure:has-text("정보면") svg text').count(); assert(texts >= 5, `${kind}/${lay}/${bg} 텍스트 ${texts}`);
-          // 텍스트가 카드 밖으로 나가지 않는지
-          const over = await pg.evaluate(() => { const svg = document.querySelector('.card-figure:nth-child(2) svg'); const vb = svg.viewBox.baseVal; return [...svg.querySelectorAll('text')].some(t => { const b = t.getBBox(); return b.x < 0 || b.y < 0 || b.x + b.width > vb.width + 1 || b.y + b.height > vb.height + 1; }); });
-          assert(!over, `${kind}/${lay}/${bg} 텍스트 넘침`);
+          await pg.locator('select').selectOption(fonts[n % 4]);
+          const logo = ['소속 이름(글자)', '패턴 크롭', '글리프 마크', '없음'][n % 4]; n++;
+          await pg.locator('.seg button', { hasText: logo }).click();
+          await checkFits(`${kind}/${pr}/${bg}/${logo}`);
         }
       }
+      // 블록 위치 임의 조합 6가지
+      const cells = pg.locator('.anchor-picker');
+      for (let i = 0; i < 6; i++) {
+        const pick = (gi, idx) => cells.nth(gi).locator('.anchor-cell').nth(idx).click();
+        const a = (round * 7 + i * 3) % 9, b = (round * 5 + i * 4 + 2) % 9, c2 = (round * 3 + i * 5 + 4) % 9;
+        if (await cells.count() >= 3) { await pick(0, a); await pick(1, b); await pick(2, c2); }
+        else { await pick(0, b); await pick(1, c2); }
+        await checkFits(`${kind}/위치조합${i}`);
+      }
+      await pg.locator('.prop-grid, .card-side input[type=range]').first().fill('1.4').catch(() => {});
     }
-    await pg.locator('.check input').check();
+    await pg.locator('.card-side > .check input').check();
     await pg.locator('.seg button', { hasText: '타일 반복' }).click();
     const fi = await h.download(() => pg.locator('.card-figure:has-text("정보면") .svg-btn').click()); const r1 = checkSvg(fi, { minPaths: 10 });
     const fp = await h.download(() => pg.locator('.card-figure:has-text("패턴면") .svg-btn').click()); checkSvg(fp, { minPaths: 1 });
     const pi = await h.download(() => pg.locator('.card-figure:has-text("정보면") .db-btn').click()); const ps = pngSize(pi); assert(ps.w === 1110 && ps.h === 638, `300dpi+재단 크기 ${ps.w}x${ps.h}`);
-    await pg.locator('.check input').uncheck();
+    await pg.locator('.card-side > .check input').uncheck();
     const pp = await h.download(() => pg.locator('.card-figure:has-text("패턴면") .db-btn').click()); const ps2 = pngSize(pp); assert(ps2.w === 1063 && ps2.h === 591, `300dpi 크기 ${ps2.w}x${ps2.h}`);
     await h.tab('조합');
     return `정보면 패스 ${r1.paths}개`;

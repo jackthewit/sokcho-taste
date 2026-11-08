@@ -1,9 +1,9 @@
 // 디지털 명함 레이아웃 (90×50mm, 단위 = 0.1mm)
-// 정보면은 가이드의 명함 디자인을 따르지 않는 독자 레이아웃. 패턴면은 앱의 조합(크롭)을 사용.
+// 정보면 = 블록(로고 · 이름 · 연락처)을 9칸 위치에 배치하는 조립식. 패턴면 = 앱의 조합(크롭).
 import { SEASONAL_COLORS } from '../constants/colors';
 import { getGlyphPath } from './glyphs';
 import { buildPatternDef, layersMarkup, esc, SVG_HEADER } from './svgBuilder';
-import { aspectCrop, type CropRect, type SenseState } from '../context/SenseContext';
+import { aspectCrop, type Anchor, type CropRect, type SenseState } from '../context/SenseContext';
 import type { TextSpec } from './textFonts';
 
 export const CARD_W = 900;
@@ -11,11 +11,11 @@ export const CARD_H = 500;
 export const BLEED = 20; // 2mm
 
 export interface CardDoc {
-  width: number;        // 전체(재단 여백 포함) 크기
+  width: number;
   height: number;
-  offset: number;       // 재단 여백
+  offset: number;
   bg: string;
-  markup: string;       // 텍스트 외 도형(패턴, 선, 글리프 마크)
+  markup: string;
   texts: TextSpec[];
 }
 
@@ -34,7 +34,7 @@ export function cardColors(state: SenseState) {
   if (state.card.bg === 'season') bg = accent;
   const dark = luminance(bg) < 0.35;
   const text = dark ? '#ffffff' : '#111111';
-  const muted = dark ? 'rgba(255,255,255,0.65)' : 'rgba(17,17,17,0.6)';
+  const muted = dark ? 'rgba(255,255,255,0.7)' : 'rgba(17,17,17,0.62)';
   const point = state.card.bg === 'season' ? text : accent;
   return { bg, text, muted, accent, point, dark };
 }
@@ -43,7 +43,7 @@ export function cardColors(state: SenseState) {
 export function estimateWidth(text: string, size: number, letterSpacing = 0): number {
   let w = 0;
   for (const ch of text) {
-    if (/[\u3131-\u318E\uAC00-\uD7A3\u4E00-\u9FFF\u3040-\u30FF]/.test(ch)) w += 0.95;
+    if (/[ㄱ-ㆎ가-힣一-鿿぀-ヿ]/.test(ch)) w += 0.95;
     else if (/[A-Z]/.test(ch)) w += 0.68;
     else if (/[a-z0-9@]/.test(ch)) w += 0.55;
     else if (ch === ' ') w += 0.3;
@@ -53,138 +53,222 @@ export function estimateWidth(text: string, size: number, letterSpacing = 0): nu
   return w * size;
 }
 
-/** 주어진 폭에 들어가도록 글자 크기를 줄임 */
 export function fitSize(text: string, maxWidth: number, size: number, minSize: number, letterSpacing = 0): number {
   const w = estimateWidth(text, size, letterSpacing);
   if (w <= maxWidth) return size;
   return Math.max(minSize, Math.floor(size * maxWidth / w));
 }
 
-function lines(s: string): string[] {
-  return s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+const lines = (s: string) => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+// ─── 블록 ────────────────────────────────────────────────
+type Align = 'start' | 'middle' | 'end';
+interface Line { text: string; size: number; weight: 400 | 700; fill: string; spacing?: number; lh: number; dx?: number; }
+interface Block { w: number; h: number; place: (x: number, y: number, align: Align) => { texts: TextSpec[]; markup: string }; }
+
+function alignX(x: number, w: number, align: Align) { return align === 'start' ? x : align === 'middle' ? x + w / 2 : x + w; }
+function anchorAlign(a: Anchor): Align { return a.endsWith('l') ? 'start' : a.endsWith('c') ? 'middle' : 'end'; }
+
+/** 여러 줄 텍스트 블록 */
+function textBlock(ls: Line[], maxWidth: number): Block {
+  const fitted = ls.map(l => ({ ...l, size: fitSize(l.text, maxWidth, l.size, Math.max(9, Math.round(l.size * 0.45)), l.spacing || 0) }));
+  const w = Math.min(maxWidth, Math.max(0, ...fitted.map(l => estimateWidth(l.text, l.size, l.spacing || 0))));
+  const h = fitted.reduce((a, l) => a + l.lh, 0);
+  return {
+    w, h,
+    place(x, y, align) {
+      const texts: TextSpec[] = []; let cy = y;
+      for (const l of fitted) {
+        cy += l.lh;
+        texts.push({ text: l.text, x: alignX(x, w, align) + (l.dx || 0), y: cy - l.lh * 0.28, size: l.size, weight: l.weight, anchor: align, fill: l.fill, letterSpacing: l.spacing || 0 });
+      }
+      return { texts, markup: '' };
+    },
+  };
 }
 
-function glyphMark(state: SenseState, x: number, y: number, size: number, fill: string, opacity = 1): string {
+function glyphMarkup(state: SenseState, x: number, y: number, size: number, fill: string, opacity = 1): string {
   const layer = state.layers.find(l => l.visible);
   if (!layer) return '';
   const g = getGlyphPath(layer.category, layer.type, layer.intensity);
   const s = size / Math.max(g.width, g.height);
-  return `<path d="${g.d}" transform="translate(${x} ${y}) scale(${s.toFixed(3)})" fill="${fill}" opacity="${opacity}"/>`;
+  return `<path d="${g.d}" transform="translate(${(x + size / 2).toFixed(1)} ${(y + size / 2).toFixed(1)}) scale(${s.toFixed(3)})" fill="${fill}" opacity="${opacity}"/>`;
 }
 
-/** 연락처 줄 목록 (빈 값은 건너뜀) */
-function contactLines(state: SenseState): { label: string; value: string }[] {
-  const f = state.card.fields;
-  const out: { label: string; value: string }[] = [];
-  if (f.phone) out.push({ label: 'M', value: f.phone });
-  if (f.email) out.push({ label: 'E', value: f.email });
-  if (f.instagram) out.push({ label: '@', value: f.instagram.replace(/^@/, '') });
-  if (f.website) out.push({ label: 'W', value: f.website.replace(/^https?:\/\//, '') });
-  return out;
+/** 패턴 크롭을 상자(사각/원/와이드)에 꽉 채워 넣은 마크 */
+function patternMarkup(state: SenseState, x: number, y: number, w: number, h: number, shape: 'rect' | 'circle' | 'wide', uid: string): string {
+  if (!state.layers.length) return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${shape === 'circle' ? w / 2 : 8}" fill="none" stroke="#bbb" stroke-dasharray="4 4"/>`;
+  const crop = state.crop ?? aspectCrop(w / h);
+  const s = Math.max(w / crop.w, h / crop.h);
+  const tx = x + (w - crop.w * s) / 2 - crop.x * s, ty = y + (h - crop.h * s) / 2 - crop.y * s;
+  const clip = shape === 'circle'
+    ? `<circle cx="${x + w / 2}" cy="${y + h / 2}" r="${Math.min(w, h) / 2}"/>`
+    : `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${shape === 'wide' ? 6 : 10}"/>`;
+  const bg = state.background === 'transparent' ? '' : `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${state.background}"/>`;
+  return `<clipPath id="${uid}"> ${clip}</clipPath><g clip-path="url(#${uid})">${bg}<g transform="translate(${tx.toFixed(2)} ${ty.toFixed(2)}) scale(${s.toFixed(4)})">${layersMarkup(state)}</g></g>`;
 }
 
 // ─── 정보면 ─────────────────────────────────────────────
 export function buildInfoDoc(state: SenseState, uid = 'info'): CardDoc {
   const { card } = state;
+  const f = card.fields;
   const c = cardColors(state);
   const off = card.bleed ? BLEED : 0;
   const texts: TextSpec[] = [];
   let markup = '';
-  const f = card.fields;
-  const isStore = card.kind === 'store';
 
-  const T = (text: string, x: number, y: number, size: number, weight: 400 | 700, anchor: TextSpec['anchor'] = 'start', fill = c.text, letterSpacing = 0, maxWidth?: number) => {
-    if (!text || !text.trim()) return;
-    const fitted = maxWidth ? fitSize(text, maxWidth, size, Math.max(10, Math.round(size * 0.4)), letterSpacing) : size;
-    texts.push({ text, x: x + off, y: y + off, size: fitted, weight, anchor, fill, letterSpacing });
-  };
-  const rect = (x: number, y: number, w: number, h: number, fill: string) =>
-    `<rect x="${x + off}" y="${y + off}" width="${w}" height="${h}" fill="${fill}"/>`;
+  const m = card.margin;
+  const barW = card.accentBar ? 14 : 0;
+  const x0 = off + m + barW, y0 = off + m;
+  const W = CARD_W - m * 2 - barW, H = CARD_H - m * 2;
+  if (card.accentBar) markup += `<rect x="${off}" y="${off}" width="14" height="${CARD_H}" fill="${c.point}"/>`;
 
-  const contacts = contactLines(state);
-  const addr = lines(f.address);
+  // 1) 로고 블록
+  const orgText = f.org.trim();
+  let logo: Block | null = null;
+  const L = card.logo;
+  if (L.type === 'org' && (orgText || f.tagline || f.orgEn)) {
+    const ls: Line[] = [];
+    if (f.tagline) ls.push({ text: f.tagline, size: 13 * L.size, weight: 400, fill: c.muted, lh: 18 * L.size });
+    if (orgText) ls.push({ text: orgText, size: 30 * L.size, weight: 700, fill: c.text, lh: 38 * L.size });
+    if (f.orgEn) ls.push({ text: f.orgEn, size: 12 * L.size, weight: 400, fill: c.muted, spacing: 0.14, lh: 18 * L.size });
+    logo = textBlock(ls, W * 0.6);
+  } else if (L.type === 'pattern' || L.type === 'glyph') {
+    const markW = (L.shape === 'wide' ? 190 : 100) * L.size, markH = (L.shape === 'wide' ? 100 : 100) * L.size;
+    const side = (orgText || f.tagline) ? textBlock([
+      ...(f.tagline ? [{ text: f.tagline, size: 12 * L.size, weight: 400 as const, fill: c.muted, lh: 17 * L.size }] : []),
+      ...(orgText ? [{ text: orgText, size: 22 * L.size, weight: 700 as const, fill: c.text, lh: 28 * L.size }] : []),
+      ...(f.orgEn ? [{ text: f.orgEn, size: 11 * L.size, weight: 400 as const, fill: c.muted, spacing: 0.12, lh: 16 * L.size }] : []),
+    ], W * 0.45) : null;
+    const gap = side ? 16 : 0;
+    const w = markW + gap + (side ? side.w : 0), h = Math.max(markH, side ? side.h : 0);
+    logo = {
+      w, h,
+      place(x, y, align) {
+        // 가운데/오른쪽 정렬이면 마크와 글을 블록 폭 안에서 그대로 배치(마크가 왼쪽)
+        const mx = x, my = y + (h - markH) / 2;
+        const mk = L.type === 'pattern'
+          ? patternMarkup(state, mx, my, markW, markH, L.shape, `${uid}-logo`)
+          : glyphMarkup(state, mx, my, Math.min(markW, markH), c.point);
+        const out = { texts: [] as TextSpec[], markup: mk };
+        if (side) { const r = side.place(mx + markW + gap, y + (h - side.h) / 2, 'start'); out.texts.push(...r.texts); }
+        void align;
+        return out;
+      },
+    };
+  }
 
-  if (!isStore) {
-    const headline = f.name;
-    const sub = [f.title, f.org].filter(Boolean).join(' · ');
-
-    if (card.layout === 'A') {
-      // 왼쪽 정렬 · 상단 이름, 하단 연락처
-      T(headline, 60, 150, 46, 700, 'start', c.text, 0, 680);
-      T(f.nameEn, 60, 186, 15, 400, 'start', c.muted, 0.1);
-      T(sub, 60, 226, 18, 400, 'start', c.muted, 0, 680);
-      markup += rect(60, 250, 56, 3, c.point);
-      let y = 500 - 60 - (contacts.length + addr.length - 1) * 27;
-      y = Math.max(y, 300);
-      contacts.forEach(l => { T(l.label, 60, y, 15, 700, 'start', c.point); T(l.value, 86, y, 17, 400, 'start', c.text, 0, 740); y += 27; });
-      addr.forEach(a => { T(a, 60, y, 15, 400, 'start', c.muted, 0, 780); y += 24; });
-      markup += glyphMark(state, 790, 90, 74, c.point);
-    } else if (card.layout === 'B') {
-      // 가운데 정렬
-      T(headline, 450, 212, 48, 700, 'middle', c.text, 0, 800);
-      T(f.nameEn, 450, 246, 14, 400, 'middle', c.muted, 0.14);
-      T(sub, 450, 284, 18, 400, 'middle', c.muted, 0, 800);
-      markup += rect(430, 312, 40, 3, c.point);
-      const row1 = contacts.filter(l => l.label === 'M' || l.label === 'E').map(l => l.value).join('   ·   ');
-      const row2 = contacts.filter(l => l.label === '@' || l.label === 'W').map(l => (l.label === '@' ? '@' : '') + l.value).join('   ·   ');
-      let y = 372;
-      if (row1) { T(row1, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
-      if (row2) { T(row2, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
-      addr.forEach(a => { T(a, 450, y, 14, 400, 'middle', c.muted, 0, 820); y += 22; });
-      markup += glyphMark(state, 450, 100, 56, c.point);
+  // 2) 이름 블록
+  const N = card.name;
+  const nameLines: Line[] = [];
+  const titleLine: Line | null = f.title ? { text: f.title, size: 18 * N.size, weight: 400, fill: c.muted, lh: 26 * N.size } : null;
+  const nameText = N.spacing > 0 ? f.name.replace(/\s+/g, '') : f.name;
+  const nameSize = 42 * N.size;
+  if (titleLine && N.titlePos === 'above') nameLines.push(titleLine);
+  if (f.name) {
+    if (N.en === 'inline' && f.nameEn) {
+      // 이름 + 영문 한 줄: 두 텍스트를 한 줄로 합쳐 배치 (자간은 이름에만)
+      nameLines.push({ text: nameText, size: nameSize, weight: 700, fill: c.text, spacing: N.spacing, lh: 50 * N.size });
     } else {
-      // 세로 포인트 바 + 흐린 큰 글리프
-      markup += `<rect x="${off}" y="${off}" width="14" height="${CARD_H}" fill="${c.point}"/>`;
-      markup += `<clipPath id="${uid}-clip"><rect x="${off}" y="${off}" width="${CARD_W}" height="${CARD_H}"/></clipPath>`;
-      markup += `<g clip-path="url(#${uid}-clip)">${glyphMark(state, 800 + off, 430 + off, 300, c.point, c.dark ? 0.22 : 0.14)}</g>`;
-      T(headline, 72, 124, 44, 700, 'start', c.text, 0, 760);
-      T(f.nameEn, 72, 158, 14, 400, 'start', c.muted, 0.1);
-      T(sub, 72, 196, 18, 400, 'start', c.muted, 0, 760);
-      let y = 500 - 56 - (contacts.length + addr.length - 1) * 26;
-      y = Math.max(y, 260);
-      contacts.forEach(l => { T(l.label, 72, y, 14, 700, 'start', c.point); T(l.value, 96, y, 16, 400, 'start', c.text, 0, 720); y += 26; });
-      addr.forEach(a => { T(a, 72, y, 14, 400, 'start', c.muted, 0, 760); y += 22; });
+      nameLines.push({ text: nameText, size: nameSize, weight: 700, fill: c.text, spacing: N.spacing, lh: 50 * N.size });
     }
-  } else {
-    // ─── 가게용: 가게 이름을 크게 ───
-    const owner = [f.name, f.title].filter(Boolean).join(' ');
-    const extra = lines(f.hours);
-    if (card.layout === 'A') {
-      T(f.storeName, 60, 182, 72, 700, 'start', c.text, 0, 680);
-      T(f.storeNameEn, 60, 218, 15, 400, 'start', c.muted, 0.14);
-      T(f.storeSub, 60, 256, 18, 400, 'start', c.muted, 0, 680);
-      markup += rect(60, 282, 56, 3, c.point);
-      const total = (owner ? 1 : 0) + contacts.length + addr.length + extra.length;
-      let y = Math.max(320, 500 - 56 - (total - 1) * 26);
-      if (owner) { T(owner, 60, y, 17, 700); y += 26; }
-      contacts.forEach(l => { T(l.label, 60, y, 14, 700, 'start', c.point); T(l.value, 84, y, 16, 400, 'start', c.text, 0, 740); y += 26; });
-      addr.forEach(a => { T(a, 60, y, 14, 400, 'start', c.muted, 0, 780); y += 22; });
-      extra.forEach(a => { T(a, 60, y, 14, 400, 'start', c.muted, 0, 780); y += 22; });
-      markup += glyphMark(state, 790, 90, 74, c.point);
-    } else if (card.layout === 'B') {
-      markup += glyphMark(state, 450, 92, 60, c.point);
-      T(f.storeName, 450, 228, 76, 700, 'middle', c.text, 0, 800);
-      T(f.storeNameEn, 450, 262, 14, 400, 'middle', c.muted, 0.16);
-      T(f.storeSub, 450, 298, 18, 400, 'middle', c.muted, 0, 800);
-      markup += rect(430, 324, 40, 3, c.point);
-      let y = 372;
-      const row1 = [owner, ...contacts.filter(l => l.label === 'M').map(l => l.value)].filter(Boolean).join('   ·   ');
-      const row2 = contacts.filter(l => l.label !== 'M').map(l => (l.label === '@' ? '@' : '') + l.value).join('   ·   ');
-      if (row1) { T(row1, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
-      if (row2) { T(row2, 450, y, 16, 400, 'middle', c.text, 0, 820); y += 26; }
-      [...addr, ...extra].forEach(a => { T(a, 450, y, 14, 400, 'middle', c.muted, 0, 820); y += 22; });
+  }
+  if (titleLine && N.titlePos === 'below') nameLines.push(titleLine);
+  if (N.en === 'below' && f.nameEn) nameLines.push({ text: f.nameEn, size: 14 * N.size, weight: 400, fill: c.muted, spacing: 0.1, lh: 20 * N.size });
+  let name: Block | null = nameLines.length ? textBlock(nameLines, W * 0.8) : null;
+  if (name && N.en === 'inline' && f.nameEn && f.name) {
+    // 영문을 이름 오른쪽에 덧붙임
+    const base = name; const enSize = 24 * N.size; const enW = estimateWidth(f.nameEn, enSize);
+    const nameW = estimateWidth(nameText, nameSize, N.spacing);
+    name = {
+      w: Math.max(base.w, nameW + 16 + enW), h: base.h,
+      place(x, y, align) {
+        const r = base.place(x, y, align);
+        const nm = r.texts.find(t => t.text === nameText);
+        if (nm) {
+          const startX = align === 'start' ? x : align === 'middle' ? x + (name!.w - (nameW + 16 + enW)) / 2 : x + name!.w - (nameW + 16 + enW);
+          nm.anchor = 'start'; nm.x = startX;
+          r.texts.push({ text: f.nameEn, x: startX + nameW + 16, y: nm.y, size: enSize, weight: 400, anchor: 'start', fill: c.text });
+        }
+        return r;
+      },
+    };
+  }
+  if (name && N.titlePos === 'inline' && titleLine && f.name) {
+    const base = name; const tW = estimateWidth(f.title, titleLine.size);
+    name = {
+      w: base.w + tW + 14, h: base.h,
+      place(x, y, align) {
+        const r = base.place(x + (align === 'start' ? tW + 14 : 0), y, align);
+        const nm = r.texts.find(t => t.text === nameText);
+        if (nm) r.texts.push({ text: f.title, x: (nm.anchor === 'start' ? nm.x : nm.anchor === 'middle' ? nm.x - estimateWidth(nameText, nm.size, N.spacing) / 2 : nm.x - estimateWidth(nameText, nm.size, N.spacing)) - 14, y: nm.y, size: titleLine.size, weight: 400, anchor: 'end', fill: c.muted });
+        return r;
+      },
+    };
+  }
+
+  // 3) 연락처 블록
+  const C = card.contacts;
+  const lab = (word: string, short: string) => C.labels === 'word' ? `${word} : ` : C.labels === 'short' ? `${short} ` : '';
+  const items: string[] = [];
+  const addr = lines(f.address);
+  if (C.addressFirst) items.push(...addr);
+  if (f.tel) items.push(lab('Tel', 'T.') + f.tel);
+  if (f.phone) items.push(lab('H.P', 'M.') + f.phone);
+  if (f.fax) items.push(lab('Fax', 'F.') + f.fax);
+  if (f.email) items.push(lab('E-mail', 'E.') + f.email);
+  if (f.instagram) items.push((C.labels === 'none' ? '' : C.labels === 'word' ? 'Instagram : ' : '') + (f.instagram.startsWith('@') ? f.instagram : '@' + f.instagram));
+  if (f.website) items.push(lab('Web', 'W.') + f.website.replace(/^https?:\/\//, ''));
+  items.push(...lines(f.hours));
+  if (!C.addressFirst) items.push(...addr);
+  const cs = 16 * C.size, clh = 26 * C.size;
+  let contacts: Block | null = null;
+  if (items.length) {
+    if (C.columns === 2 && items.length > 2) {
+      const half = Math.ceil(items.length / 2);
+      const a = textBlock(items.slice(0, half).map(t => ({ text: t, size: cs, weight: 400 as const, fill: c.text, lh: clh })), W * 0.5);
+      const b = textBlock(items.slice(half).map(t => ({ text: t, size: cs, weight: 400 as const, fill: c.text, lh: clh })), W * 0.5);
+      const gap = 36;
+      contacts = {
+        w: a.w + gap + b.w, h: Math.max(a.h, b.h),
+        place(x, y) { const r1 = a.place(x, y, 'start'); const r2 = b.place(x + a.w + gap, y, 'start'); return { texts: [...r1.texts, ...r2.texts], markup: '' }; },
+      };
     } else {
-      markup += `<rect x="${off}" y="${off}" width="14" height="${CARD_H}" fill="${c.point}"/>`;
-      markup += `<clipPath id="${uid}-clip"><rect x="${off}" y="${off}" width="${CARD_W}" height="${CARD_H}"/></clipPath>`;
-      markup += `<g clip-path="url(#${uid}-clip)">${glyphMark(state, 800 + off, 430 + off, 300, c.point, c.dark ? 0.22 : 0.14)}</g>`;
-      T(f.storeName, 72, 150, 64, 700, 'start', c.text, 0, 760);
-      T(f.storeNameEn, 72, 184, 14, 400, 'start', c.muted, 0.14);
-      T(f.storeSub, 72, 222, 18, 400, 'start', c.muted, 0, 760);
-      const total = (owner ? 1 : 0) + contacts.length + addr.length + extra.length;
-      let y = Math.max(280, 500 - 56 - (total - 1) * 26);
-      if (owner) { T(owner, 72, y, 16, 700); y += 26; }
-      contacts.forEach(l => { T(l.label, 72, y, 14, 700, 'start', c.point); T(l.value, 96, y, 16, 400, 'start', c.text, 0, 720); y += 26; });
-      [...addr, ...extra].forEach(a => { T(a, 72, y, 14, 400, 'start', c.muted, 0, 760); y += 22; });
+      contacts = textBlock(items.map(t => ({ text: t, size: cs, weight: 400 as const, fill: c.text, lh: clh })), W);
+    }
+  }
+
+  // 4) 배치 — 먼저 위치를 계산하고, 세로로 겹치는 블록은 가운데 블록을 밀어 겹침을 피함
+  const GAP = 14;
+  const entries: { b: Block; a: Anchor; x: number; y: number; key: 'logo' | 'name' | 'contacts' }[] = [];
+  const pos = (b: Block, a: Anchor) => ({
+    x: a.endsWith('l') ? x0 : a.endsWith('c') ? x0 + (W - b.w) / 2 : x0 + W - b.w,
+    y: a.startsWith('t') ? y0 : a.startsWith('m') ? y0 + (H - b.h) / 2 : y0 + H - b.h,
+  });
+  if (logo) entries.push({ b: logo, a: L.pos, ...pos(logo, L.pos), key: 'logo' });
+  if (name) entries.push({ b: name, a: N.pos, ...pos(name, N.pos), key: 'name' });
+  if (contacts) entries.push({ b: contacts, a: C.pos, ...pos(contacts, C.pos), key: 'contacts' });
+
+  const overlapX = (p: typeof entries[0], q: typeof entries[0]) => p.x < q.x + q.b.w && q.x < p.x + p.b.w;
+  const overlapY = (p: typeof entries[0], q: typeof entries[0]) => p.y < q.y + q.b.h + GAP && q.y < p.y + p.b.h + GAP;
+  const vOrder = (a: Anchor) => (a.startsWith('t') ? 0 : a.startsWith('m') ? 1 : 2);
+  for (let pass = 0; pass < 3; pass++) {
+    for (const p of entries) for (const q of entries) {
+      if (p === q || !overlapX(p, q) || !overlapY(p, q)) continue;
+      const [top, bottom] = vOrder(p.a) <= vOrder(q.a) ? [p, q] : [q, p];
+      if (vOrder(top.a) === vOrder(bottom.a)) continue; // 같은 칸을 고른 경우는 사용자의 의도로 보고 둠
+      if (vOrder(bottom.a) === 1) bottom.y = top.y + top.b.h + GAP;             // 위 블록이 가운데 블록을 아래로
+      else if (vOrder(top.a) === 1) top.y = bottom.y - top.b.h - GAP;           // 아래 블록이 가운데 블록을 위로
+      else top.y = Math.max(y0, bottom.y - top.b.h - GAP);                       // 위-아래가 직접 겹치면 위 블록을 올림
+    }
+  }
+  for (const e of entries) {
+    const r = e.b.place(e.x, e.y, anchorAlign(e.a));
+    texts.push(...r.texts); markup += r.markup;
+    if (e.key === 'name' && card.divider) {
+      const al = anchorAlign(e.a);
+      const lx = al === 'start' ? e.x : al === 'middle' ? e.x + e.b.w / 2 - 20 : e.x + e.b.w - 40;
+      markup += `<rect x="${lx.toFixed(1)}" y="${(e.y + e.b.h + 8).toFixed(1)}" width="40" height="3" fill="${c.point}"/>`;
     }
   }
 
@@ -216,10 +300,10 @@ export function buildPatternDoc(state: SenseState, uid = 'pat'): CardDoc {
 
 /** 문서 → SVG 문자열. textMarkup 은 텍스트를 패스로 바꾼 조각(없으면 <text>로 출력) */
 export function cardDocToSvg(doc: CardDoc, textMarkup: string | null, fontFamily: string, opts: { pixelWidth?: number; trimMarks?: boolean } = {}): string {
-  const pw = opts.pixelWidth ?? Math.round(doc.width / 10 / 25.4 * 300); // 300dpi 기준 픽셀
+  const pw = opts.pixelWidth ?? Math.round(doc.width / 10 / 25.4 * 300);
   const ph = Math.round(pw * doc.height / doc.width);
   const texts = textMarkup ?? doc.texts.map(t =>
-    `<text x="${t.x}" y="${t.y}" font-size="${t.size}" font-weight="${t.weight}" text-anchor="${t.anchor}" fill="${t.fill}" font-family="${fontFamily}"${t.letterSpacing ? ` letter-spacing="${t.letterSpacing}em"` : ''}>${esc(t.text)}</text>`
+    `<text x="${t.x.toFixed(1)}" y="${t.y.toFixed(1)}" font-size="${t.size}" font-weight="${t.weight}" text-anchor="${t.anchor}" fill="${t.fill}" font-family="${fontFamily}"${t.letterSpacing ? ` letter-spacing="${t.letterSpacing}em"` : ''}>${esc(t.text)}</text>`
   ).join('\n  ');
   const marks = opts.trimMarks && doc.offset
     ? `<rect x="${doc.offset}" y="${doc.offset}" width="${doc.width - doc.offset * 2}" height="${doc.height - doc.offset * 2}" fill="none" stroke="#000" stroke-width="0.6" stroke-dasharray="6 4" opacity="0.5"/>`

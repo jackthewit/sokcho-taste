@@ -158,7 +158,7 @@ export default function ComposerCanvas({ showCrop = true }: { showCrop?: boolean
 
   // 휠로 선택 레이어 크기 조절 — 캔버스 위에서는 페이지 스크롤을 막아야 하므로 passive 가 아닌 리스너로 직접 등록
   const selectedRef = useRef(selected);
-  selectedRef.current = selected;
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;

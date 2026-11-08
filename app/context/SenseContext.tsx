@@ -28,48 +28,50 @@ export interface CropRect { x: number; y: number; w: number; h: number; }
 export type TileMode = 'grid' | 'brick' | 'mirror';
 
 export type CardKind = 'personal' | 'store';
-export type CardLayout = 'A' | 'B' | 'C';
 export type CardBg = 'white' | 'black' | 'season';
 export type FontId = 'noto-sans-kr' | 'noto-serif-kr' | 'nanum-myeongjo' | 'gowun-batang';
+/** 9칸 위치: 위/가운데/아래 × 왼쪽/가운데/오른쪽 */
+export type Anchor = 'tl' | 'tc' | 'tr' | 'ml' | 'mc' | 'mr' | 'bl' | 'bc' | 'br';
+export type LogoType = 'org' | 'pattern' | 'glyph' | 'none';
+export type CardPreset = 'classic-left' | 'classic-right' | 'center' | 'bar';
 
 export interface CardFields {
   name: string;
   nameEn: string;
   title: string;
-  org: string;
-  phone: string;
+  org: string;        // 소속 (가게용에서는 가게 이름)
+  orgEn: string;      // 소속 영문
+  tagline: string;    // 로고 옆 짧은 문구 (예: 함께하여 아름다운 / 물회·섭국 전문)
+  phone: string;      // H.P
+  tel: string;        // Tel
+  fax: string;
   email: string;
   instagram: string;
   website: string;
   address: string;
+  hours: string;
+  // 이전 버전 호환
   storeName: string;
   storeNameEn: string;
-  storeSub: string;   // 가게 한 줄 소개 / 업종
-  hours: string;
+  storeSub: string;
 }
 
 export interface CardState {
   kind: CardKind;
-  layout: CardLayout;
+  preset: CardPreset;
   bg: CardBg;
-  accentTaste: TasteKey;   // 계절색 바탕/포인트 색에 쓸 맛
+  accentTaste: TasteKey;
   font: FontId;
-  bleed: boolean;          // 재단 여백 2mm 포함
+  bleed: boolean;
   patternFit: 'cover' | 'tile';
-  patternScale: number;    // tile 모드일 때 가로 반복 수
+  patternScale: number;
+  margin: number;                 // 안쪽 여백 (0.1mm 단위)
+  divider: boolean;               // 이름 아래 짧은 구분선
+  accentBar: boolean;             // 왼쪽 세로 포인트 띠
+  logo: { type: LogoType; pos: Anchor; size: number; shape: 'rect' | 'circle' | 'wide'; };
+  name: { pos: Anchor; size: number; spacing: number; en: 'inline' | 'below' | 'hidden'; titlePos: 'above' | 'inline' | 'below'; };
+  contacts: { pos: Anchor; columns: 1 | 2; labels: 'word' | 'short' | 'none'; size: number; addressFirst: boolean; };
   fields: CardFields;
-}
-
-export interface SenseState {
-  season: Season;
-  layers: Layer[];        // 배열 뒤쪽이 위(앞)에 그려짐
-  selectedId: string | null;
-  foodName: string;
-  background: string;     // 'transparent' 또는 hex
-  crop: CropRect | null;
-  cropAspect: number | null; // 가로/세로 비율 고정 (null = 자유)
-  tile: { mode: TileMode; scale: number; };
-  card: CardState;
 }
 
 export const FONT_LABELS: Record<FontId, string> = {
@@ -86,21 +88,57 @@ export const FONT_FAMILIES: Record<FontId, string> = {
   'gowun-batang': "'Gowun Batang', serif",
 };
 
+/** 프리셋 → 블록 배치 */
+export const CARD_PRESETS: Record<CardPreset, { label: string; desc: string; apply: Partial<CardState> }> = {
+  'classic-left': {
+    label: '기본 · 왼쪽', desc: '로고 왼쪽 위 · 이름 가운데 · 연락처 아래 (1단)',
+    apply: { logo: { type: 'org', pos: 'tl', size: 1, shape: 'wide' }, name: { pos: 'ml', size: 1, spacing: 0.3, en: 'hidden', titlePos: 'above' }, contacts: { pos: 'bl', columns: 1, labels: 'word', size: 1, addressFirst: true }, divider: false, accentBar: false },
+  },
+  'classic-right': {
+    label: '기본 · 오른쪽', desc: '로고 오른쪽 위 · 이름+영문 · 연락처 2단',
+    apply: { logo: { type: 'org', pos: 'tr', size: 1, shape: 'wide' }, name: { pos: 'ml', size: 1, spacing: 0.3, en: 'inline', titlePos: 'above' }, contacts: { pos: 'bl', columns: 2, labels: 'word', size: 1, addressFirst: false }, divider: false, accentBar: false },
+  },
+  center: {
+    label: '가운데', desc: '로고 위 가운데 · 이름 가운데 · 연락처 아래 가운데',
+    apply: { logo: { type: 'pattern', pos: 'tc', size: 0.9, shape: 'circle' }, name: { pos: 'mc', size: 1, spacing: 0.2, en: 'below', titlePos: 'above' }, contacts: { pos: 'bc', columns: 1, labels: 'short', size: 0.95, addressFirst: false }, divider: true, accentBar: false },
+  },
+  bar: {
+    label: '포인트 바', desc: '세로 색 띠 · 로고 오른쪽 아래 · 이름 왼쪽 위',
+    apply: { logo: { type: 'glyph', pos: 'br', size: 1.1, shape: 'rect' }, name: { pos: 'tl', size: 1, spacing: 0.1, en: 'below', titlePos: 'below' }, contacts: { pos: 'bl', columns: 1, labels: 'short', size: 1, addressFirst: false }, divider: false, accentBar: true },
+  },
+};
+
 const defaultCard: CardState = {
   kind: 'personal',
-  layout: 'A',
+  preset: 'classic-left',
   bg: 'white',
   accentTaste: 'sweet',
   font: 'noto-sans-kr',
   bleed: false,
   patternFit: 'cover',
   patternScale: 3,
+  margin: 60,
+  divider: false,
+  accentBar: false,
+  ...(CARD_PRESETS['classic-left'].apply as Pick<CardState, 'logo' | 'name' | 'contacts'>),
   fields: {
-    name: '', nameEn: '', title: '', org: '',
-    phone: '', email: '', instagram: '', website: '', address: '',
-    storeName: '', storeNameEn: '', storeSub: '', hours: '',
+    name: '', nameEn: '', title: '', org: '', orgEn: '', tagline: '',
+    phone: '', tel: '', fax: '', email: '', instagram: '', website: '', address: '', hours: '',
+    storeName: '', storeNameEn: '', storeSub: '',
   },
 };
+
+export interface SenseState {
+  season: Season;
+  layers: Layer[];        // 배열 뒤쪽이 위(앞)에 그려짐
+  selectedId: string | null;
+  foodName: string;
+  background: string;     // 'transparent' 또는 hex
+  crop: CropRect | null;
+  cropAspect: number | null; // 가로/세로 비율 고정 (null = 자유)
+  tile: { mode: TileMode; scale: number; };
+  card: CardState;
+}
 
 const initialState: SenseState = {
   season: 'spring',
@@ -128,7 +166,7 @@ type SenseAction =
   | { type: 'SET_CROP'; payload: CropRect | null }
   | { type: 'SET_CROP_ASPECT'; payload: number | null }
   | { type: 'SET_TILE'; payload: Partial<SenseState['tile']> }
-  | { type: 'SET_CARD'; payload: Partial<CardState> }
+  | { type: 'SET_CARD'; payload: Partial<Omit<CardState, 'logo' | 'name' | 'contacts'>> & { logo?: Partial<CardState['logo']>; name?: Partial<CardState['name']>; contacts?: Partial<CardState['contacts']> } }
   | { type: 'SET_CARD_FIELD'; payload: { key: keyof CardFields; value: string } }
   | { type: 'RESET' }
   | { type: 'UNDO' }
@@ -240,8 +278,15 @@ function coreReducer(state: SenseState, action: SenseAction): SenseState {
     case 'SET_TILE':
       return { ...state, tile: { ...state.tile, ...action.payload } };
 
-    case 'SET_CARD':
-      return { ...state, card: { ...state.card, ...action.payload } };
+    case 'SET_CARD': {
+      const p = action.payload;
+      return { ...state, card: {
+        ...state.card, ...p,
+        logo: { ...state.card.logo, ...(p.logo || {}) },
+        name: { ...state.card.name, ...(p.name || {}) },
+        contacts: { ...state.card.contacts, ...(p.contacts || {}) },
+      } };
+    }
 
     case 'SET_CARD_FIELD':
       return { ...state, card: { ...state.card, fields: { ...state.card.fields, [action.payload.key]: action.payload.value } } };
@@ -249,8 +294,22 @@ function coreReducer(state: SenseState, action: SenseAction): SenseState {
     case 'RESET':
       return { ...initialState, season: state.season, card: state.card };
 
-    case 'LOAD':
-      return { ...initialState, ...action.payload, card: { ...defaultCard, ...action.payload.card, fields: { ...defaultCard.fields, ...(action.payload.card?.fields || {}) } } };
+    case 'LOAD': {
+      const c = (action.payload.card || {}) as Partial<CardState> & { layout?: string };
+      const fields = { ...defaultCard.fields, ...(c.fields || {}) };
+      // 이전 버전(가게 이름 별도 필드) → 소속/문구로 옮김
+      if (!fields.org && fields.storeName) fields.org = fields.storeName;
+      if (!fields.orgEn && fields.storeNameEn) fields.orgEn = fields.storeNameEn;
+      if (!fields.tagline && fields.storeSub) fields.tagline = fields.storeSub;
+      const card: CardState = {
+        ...defaultCard, ...c,
+        logo: { ...defaultCard.logo, ...(c.logo || {}) },
+        name: { ...defaultCard.name, ...(c.name || {}) },
+        contacts: { ...defaultCard.contacts, ...(c.contacts || {}) },
+        fields,
+      };
+      return { ...initialState, ...action.payload, card };
+    }
 
     default:
       return state;
