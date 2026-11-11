@@ -334,6 +334,11 @@ function coreReducer(state: SenseState, action: SenseAction): SenseState {
 interface HistoryState { present: SenseState; past: SenseState[]; }
 const UNDOABLE = new Set(['ADD_LAYER', 'REMOVE_LAYER', 'DUPLICATE_LAYER', 'MOVE_LAYER', 'RESET', 'SET_CROP', 'SET_CROP_ASPECT', 'SET_SEASON']);
 
+/** 저장된 작업 데이터를 앱이 여는 것과 똑같이 복원 (일괄 내보내기 스크립트 등에서 사용) */
+export function stateFromWorkData(data: Partial<SenseState>): SenseState {
+  return coreReducer(initialState, { type: 'LOAD', payload: { ...initialState, ...data, selectedId: null } as SenseState });
+}
+
 function historyReducer(h: HistoryState, action: SenseAction): HistoryState {
   if (action.type === 'UNDO') {
     if (!h.past.length) return h;
