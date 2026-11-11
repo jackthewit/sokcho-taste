@@ -4,7 +4,7 @@
 import React, { createContext, useContext, useEffect, useReducer, type ReactNode } from 'react';
 import { Season, TasteType } from '../constants/colors';
 import { TextureType, IntensityLevel } from '../constants/keymap';
-import { createWork, loadWork, loadWorkLocal, loadWorkRemoteIfNewer, saveWork, currentWorkId, setCurrentWorkId, setActiveWorkId, type WorkData, type WorkDoc } from '../lib/works';
+import { createWork, loadWork, loadWorkLocal, loadWorkRemoteIfNewer, saveWork, subscribeWork, currentWorkId, setCurrentWorkId, setActiveWorkId, type WorkData, type WorkDoc } from '../lib/works';
 
 export const CANVAS = 1000; // 조합 캔버스 좌표계 (정사각형)
 
@@ -353,7 +353,7 @@ function historyReducer(h: HistoryState, action: SenseAction): HistoryState {
 
 // ─── Context ─────────────────────────────────────────────
 export interface WorkInfo { id: string; author: string; org: string; createdAt: number; }
-export type SaveStatus = 'idle' | 'saving' | 'cloud' | 'local' | 'error';
+export type SaveStatus = 'idle' | 'saving' | 'cloud' | 'local' | 'error' | 'remote';
 
 interface SenseContextType {
   state: SenseState;
@@ -474,6 +474,23 @@ export function SenseProvider({ children }: { children: ReactNode }) {
 
   const closeWork = React.useCallback(() => { setWork(null); setCurrentWorkId(null); setSaveStatus('idle'); }, []);
   useEffect(() => { setActiveWorkId(work?.id ?? null); }, [work]);
+
+  // 다른 기기에서 같은 작업을 저장하면 반영 (내 쪽에 저장 대기 중인 변경이 있으면 내 저장이 뒤따르므로 최신 저장이 이김)
+  useEffect(() => {
+    if (!work) return;
+    const unsub = subscribeWork(work.id, remote => {
+      const json = JSON.stringify(remote.data);
+      if (json === lastSavedJson.current) return;
+      if (pendingRef.current) return; // 내 변경을 곧 저장할 예정 → 그쪽이 더 최신
+      suppressSave.current = true;
+      dispatch({ type: 'LOAD', payload: { ...initialState, ...remote.data, selectedId: null } as SenseState });
+      lastSavedJson.current = json;
+      setLastSavedAt(remote.updatedAt);
+      setSaveStatus('remote');
+      setTimeout(() => { suppressSave.current = false; setSaveStatus(s => (s === 'remote' ? 'cloud' : s)); }, 1500);
+    });
+    return unsub;
+  }, [work]);
 
   const snapshot = React.useCallback(() => dispatch({ type: 'SNAPSHOT' }), []);
 

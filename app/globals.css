@@ -1995,3 +1995,9 @@ body::before {
 .nudge label b { color: #111; margin-left: 4px; }
 .nudge input[type=range] { width: 100%; accent-color: #111; }
 .seg button:disabled { opacity: 0.35; cursor: not-allowed; }
+.save-status.remote i { background: #a78bfa; }
+.recent-box { background: #f6f6f6; border-radius: 10px; padding: 10px 12px; }
+.recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.recent-list button { width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; gap: 8px; background: #fff; border: 1px solid #e3e3e3; border-radius: 8px; padding: 8px 10px; cursor: pointer; font: inherit; color: #111; }
+.recent-list button:hover { border-color: #111; }
+.recent-list b { font-size: 0.82rem; } .recent-list small { font-size: 0.66rem; color: #777; white-space: nowrap; }

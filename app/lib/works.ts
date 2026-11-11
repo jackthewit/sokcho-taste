@@ -3,7 +3,7 @@
 // - 인터넷이 없으면 기기에만 저장되고, 연결되면 Firestore 오프라인 캐시가 올려 줌
 import { db, CLOUD_ENABLED } from './firebase';
 import {
-  collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, limit, serverTimestamp, Timestamp, arrayUnion,
+  collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, limit, serverTimestamp, Timestamp, arrayUnion, onSnapshot,
 } from 'firebase/firestore';
 import type { SenseState } from '../context/SenseContext';
 
@@ -23,7 +23,7 @@ export interface WorkMeta {
   cloud: boolean;         // 클라우드에 올라간 적이 있는지
 }
 
-export interface WorkDoc extends WorkMeta { data: WorkData; exports?: { type: string; at: number }[]; }
+export interface WorkDoc extends WorkMeta { data: WorkData; exports?: { type: string; at: number }[]; lastDevice?: string; }
 
 const COL = 'works';
 const LS_INDEX = 'sokcho-works-index-v1';
@@ -76,6 +76,7 @@ function fromSnapshot(id: string, d: Record<string, unknown>): WorkDoc {
     layerCount: Number(d.layerCount || 0), thumb: typeof d.thumb === 'string' ? d.thumb : undefined,
     device: String(d.device || ''), cloud: true,
     data: d.data as WorkData, exports: (d.exports as WorkDoc['exports']) || [],
+    lastDevice: typeof d.lastDevice === 'string' ? d.lastDevice : undefined,
   };
 }
 
@@ -111,7 +112,7 @@ export async function saveWork(id: string, data: WorkData, thumb?: string): Prom
   localSave(docu);
   if (!db) return { cloud: false };
   try {
-    const payload: Record<string, unknown> = { data, title: meta.title, season: meta.season, layerCount: meta.layerCount, updatedAt: serverTimestamp(), updatedAtMs: t };
+    const payload: Record<string, unknown> = { data, title: meta.title, season: meta.season, layerCount: meta.layerCount, updatedAt: serverTimestamp(), updatedAtMs: t, lastDevice: deviceId() };
     if (thumb) payload.thumb = thumb;
     if (!meta.cloud) {
       await withTimeout(setDoc(doc(db, COL, id), { ...payload, author: meta.author, org: meta.org, device: meta.device, createdAt: Timestamp.fromMillis(meta.createdAt), createdAtMs: meta.createdAt, exports: docu.exports }, { merge: true }), 8000);
@@ -203,4 +204,29 @@ let activeWorkId: string | null = null;
 export const setActiveWorkId = (id: string | null) => { activeWorkId = id; };
 export function noteExport(filename: string) {
   if (activeWorkId) void logExport(activeWorkId, filename.replace(/\d{8}/, '').slice(0, 60));
+}
+
+/** 다른 기기에서 이 작업을 저장하면 알려줌 (내 기기의 저장 echo 는 걸러냄) */
+export function subscribeWork(id: string, onRemote: (w: WorkDoc) => void): () => void {
+  if (!db) return () => {};
+  try {
+    const me = deviceId();
+    return onSnapshot(doc(db, COL, id), snap => {
+      if (!snap.exists() || snap.metadata.hasPendingWrites) return;
+      const w = fromSnapshot(snap.id, snap.data() as Record<string, unknown>);
+      if (w.lastDevice && w.lastDevice === me) return; // 내가 저장한 것
+      const d = snap.data() as Record<string, unknown>;
+      if (typeof d.updatedAtMs === 'number') w.updatedAt = d.updatedAtMs;
+      localSave(w);
+      onRemote(w);
+    }, err => console.warn('실시간 구독 오류:', err));
+  } catch { return () => {}; }
+}
+
+/** 같은 이름으로 만든 최근 작업 (어느 기기에서 만들었든) */
+export async function recentWorksByAuthor(author: string, max = 5): Promise<WorkMeta[]> {
+  const a = author.trim().toLowerCase();
+  if (!a) return [];
+  const all = await listWorks(200);
+  return all.filter(w => w.author.trim().toLowerCase() === a).slice(0, max);
 }
